@@ -23,6 +23,7 @@ function App() {
   const [showTransferPopup, setShowTransferPopup] = useState(false);
   const [receiverPublicAddress, setReceiverPublicAddress] = useState('');
   const [darkMode, setDarkMode] = useState(false);
+  const [showUserDetailsPopup, setShowUserDetailsPopup] = useState(false); // New state for user details popup
 
   const toggleDarkMode = useCallback(() => {
     setDarkMode((prevMode) => !prevMode);
@@ -232,6 +233,9 @@ function App() {
     }
   }, [loggedInUser, password]);
   
+  const showUserDetails = useCallback(() => {
+    setShowUserDetailsPopup(true);
+  }, []);
 
   return (
     <div className={`App ${darkMode ? 'dark-mode' : ''}`}>
@@ -324,29 +328,34 @@ function App() {
       {showDocumentsPopup && (
         <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="wallet-popup-content">
-            <h2>Wallet Documents</h2>
-            <p>Public Address: {publicAddress}</p>
             {selectedDocument ? (
               <div className="wallet-document-details">
-              <p>Hash: {selectedDocument.hash}</p>
-              <p>Timestamp: {new Date(selectedDocument.timestamp).toLocaleString()}</p>
-              <p>Owner ID: {loggedInUser}</p> {/* Display owner ID; adjust as needed based on your data model */}
-              <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.hash)}>Delete</button>
-              <button className="btn" onClick={() => setShowTransferPopup(true)}>Send</button>
-              <button className="btn" onClick={() => handleDecodeFile(selectedDocument.hash)}>Download</button>
-              <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
-            </div>
+                <h2>{selectedDocument.fileName}</h2>
+                <p>Hash: {selectedDocument.hash}</p>
+                <p>Timestamp: {new Date(selectedDocument.timestamp).toLocaleString()}</p>
+                <p>Owner ID: {loggedInUser}</p>
+                <div className="btn-group">
+                  <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.hash)}>Delete</button>
+                  <button className="btn" onClick={() => setShowTransferPopup(true)}>Send</button>
+                  <button className="btn" onClick={() => handleDecodeFile(selectedDocument.hash)}>Download</button>
+                  <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
+                </div>
+              </div>
             ) : (
-              <ul>
-                {documents.map((doc, index) => (
-                  <li key={index} onClick={() => setSelectedDocument(doc)} className={darkMode ? 'dark-mode' : ''}>
-                    <p>Document {index + 1}</p>
-                    <p>Timestamp: {new Date(doc.timestamp).toLocaleString()}</p>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <button className="btn" onClick={showUserDetails}>Show wallet details</button>
+                <ul>
+                  {documents.map((doc, index) => (
+                    <li key={index} onClick={() => setSelectedDocument(doc)} className={darkMode ? 'dark-mode' : ''}>
+                      <p>{doc.fileName}</p>
+                      <p>Owner ID: {loggedInUser}</p>
+                      <p>Timestamp: {new Date(doc.timestamp).toLocaleString()}</p>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
-            <button className="btn" onClick={() => setShowDocumentsPopup(false)}>Close Wallet</button>
+            <button className="btn" onClick={() => setShowDocumentsPopup(false)}>Close</button>
           </div>
         </div>
       )}
@@ -365,6 +374,17 @@ function App() {
             <button className="btn" onClick={handleTransfer}>Confirm and Send</button>
             <button className="btn" onClick={() => setShowTransferPopup(false)}>Close</button>
             <p>{message}</p>
+          </div>
+        </div>
+      )}
+
+      {showUserDetailsPopup && (
+        <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
+          <div className="wallet-popup-content">
+            <h2>Wallet Details</h2>
+            <p>User ID: {loggedInUser}</p>
+            <p>Public Address: {publicAddress}</p>
+            <button className="btn" onClick={() => setShowUserDetailsPopup(false)}>Close</button>
           </div>
         </div>
       )}
