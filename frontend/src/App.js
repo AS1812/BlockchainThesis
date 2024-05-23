@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 import ParticlesComponent from './components/ParticlesBackground';
@@ -20,10 +20,11 @@ function App() {
   const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [showTransferPopup, setShowTransferPopup] = useState(false);
-  const [receiverPublicAddress, setReceiverPublicAddress] = useState('');
+  const [showSendPopup, setShowSendPopup] = useState(false); // Renamed
+  const [email, setEmail] = useState(''); // New state for email
   const [darkMode, setDarkMode] = useState(false);
-  const [showUserDetailsPopup, setShowUserDetailsPopup] = useState(false); // New state for user details popup
+  const [showUserDetailsPopup, setShowUserDetailsPopup] = useState(false);
+  const [sendMessage, setSendMessage] = useState(''); // New state for send message
 
   const toggleDarkMode = useCallback(() => {
     setDarkMode((prevMode) => !prevMode);
@@ -42,6 +43,15 @@ function App() {
       console.error(error);
     }
   }, []);
+
+  useEffect(() => {
+    if (loggedInUser && password) {
+      const interval = setInterval(() => {
+        loadWallet(loggedInUser, password);
+      }, 5000); // Refresh every 5 seconds
+      return () => clearInterval(interval);
+    }
+  }, [loggedInUser, password, loadWallet]);
 
   const handleUpload = useCallback(async () => {
     if (!loggedInUser) {
@@ -164,33 +174,31 @@ function App() {
     }
   }, [loggedInUser, oldPassword, newPassword]);
 
-  const handleTransfer = useCallback(async () => {
+  const handleSend = useCallback(async () => {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setMessage('Invalid email address');
+      return;
+    }
+  
     try {
-      const response = await axios.post('http://localhost:3000/transfer-document', {
+      const response = await axios.post('http://localhost:3000/send-document', {
         senderId: loggedInUser,
         senderPassword: password,
         documentHash: selectedDocument.hash,
-        receiverPublicAddress
+        email
       });
-  
-      // After successful transfer, refresh wallet documents
-      await loadWallet(loggedInUser, password);
   
       // Close any open document or popup views
       setSelectedDocument(null);
-      setShowDocumentsPopup(true); // Assuming this controls visibility of the main wallet page
-      setShowTransferPopup(false);
+      setShowSendPopup(false);
   
-      // Set and clear the transfer success message
-      setMessage(response.data.message);
-      setTimeout(() => {
-        setMessage('');
-      }, 4000); // Clear message after 4 seconds
+      // Set send success message
+      setSendMessage(`Document sent successfully to ${email}`);
     } catch (error) {
-      setMessage('Error transferring document');
+      setMessage('Error sending document');
       console.error(error);
     }
-  }, [loggedInUser, password, loadWallet, selectedDocument, receiverPublicAddress]);
+  }, [loggedInUser, password, selectedDocument, email]);
   
 
   const handleDecodeFile = useCallback(async (hash) => {
@@ -200,12 +208,12 @@ function App() {
         password,
         hash
       });
-  
+
       if (response.data.fileContent && response.data.fileName && response.data.fileType) {
         const base64Data = response.data.fileContent;
         const fileName = response.data.fileName;
         const fileType = response.data.fileType;
-  
+
         // Convert Base64 to binary data
         const byteCharacters = atob(base64Data.replace(/^data:.+;base64,/, ''));
         const byteNumbers = new Array(byteCharacters.length);
@@ -214,7 +222,7 @@ function App() {
         }
         const byteArray = new Uint8Array(byteNumbers);
         const blob = new Blob([byteArray], { type: fileType });
-  
+
         // Create a link element and trigger a download with the correct file name and type
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
@@ -222,7 +230,7 @@ function App() {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-  
+
         setMessage(response.data.message);
       } else {
         setMessage('Failed to retrieve file details for download.');
@@ -232,9 +240,25 @@ function App() {
       console.error(error);
     }
   }, [loggedInUser, password]);
-  
+
   const showUserDetails = useCallback(() => {
     setShowUserDetailsPopup(true);
+  }, []);
+
+  const verifyDocumentIntegrity = useCallback(async (documentHash) => {
+    try {
+      const response = await axios.post('http://localhost:3000/verify-document', {
+        documentHash
+      });
+      if (response.data.isValid) {
+        alert('Document integrity verified.');
+      } else {
+        alert('Document integrity verification failed.');
+      }
+    } catch (error) {
+      console.error('Error verifying document integrity:', error);
+      alert('Error verifying document integrity.');
+    }
   }, []);
 
   return (
@@ -242,7 +266,7 @@ function App() {
       <ParticlesComponent id="particles" darkMode={darkMode} />
 
       <header className="App-header">
-        <h1 className={darkMode ? 'dark-mode' : ''}>Document Signing</h1>
+        <h1 className={darkMode ? 'dark-mode' : ''}>DocOps</h1>
         {loggedInUser && (
           <>
             <div className="upload-container">
@@ -336,43 +360,49 @@ function App() {
                 <p>Owner ID: {loggedInUser}</p>
                 <div className="btn-group">
                   <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.hash)}>Delete</button>
-                  <button className="btn" onClick={() => setShowTransferPopup(true)}>Send</button>
+                  <button className="btn" onClick={() => setShowSendPopup(true)}>Send</button>
                   <button className="btn" onClick={() => handleDecodeFile(selectedDocument.hash)}>Download</button>
                   <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
+                  <button className="btn" onClick={() => verifyDocumentIntegrity(selectedDocument.hash)}>Verify Integrity</button>
                 </div>
+                {sendMessage && <p>{sendMessage}</p>}
               </div>
             ) : (
               <>
                 <button className="btn" onClick={showUserDetails}>Show wallet details</button>
-                <ul>
-                  {documents.map((doc, index) => (
-                    <li key={index} onClick={() => setSelectedDocument(doc)} className={darkMode ? 'dark-mode' : ''}>
-                      <p>{doc.fileName}</p>
-                      <p>Owner ID: {loggedInUser}</p>
-                      <p>Timestamp: {new Date(doc.timestamp).toLocaleString()}</p>
-                    </li>
-                  ))}
-                </ul>
+                {documents.length === 0 ? (
+                  <p>Your wallet has no documents.</p>
+                ) : (
+                  <ul>
+                    {documents.map((doc, index) => (
+                      <li key={index} onClick={() => setSelectedDocument(doc)} className={darkMode ? 'dark-mode' : ''}>
+                        <p>{doc.fileName}</p>
+                        <p>Owner ID: {loggedInUser}</p>
+                        <p>Timestamp: {new Date(doc.timestamp).toLocaleString()}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </>
             )}
-            <button className="btn" onClick={() => setShowDocumentsPopup(false)}>Close</button>
+            <button className="btn" onClick={() => setShowDocumentsPopup(false)}>Close Wallet</button>
           </div>
         </div>
       )}
 
-      {showTransferPopup && (
+      {showSendPopup && (
         <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="wallet-popup-content">
-            <h2>Transfer Document</h2>
+            <h2>Send Document</h2>
             <input
-              type="text"
-              placeholder="Enter Receiver Public Address"
-              value={receiverPublicAddress}
-              onChange={(e) => setReceiverPublicAddress(e.target.value)}
+              type="email"
+              placeholder="Enter Receiver's Email Address"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               className="input"
             />
-            <button className="btn" onClick={handleTransfer}>Confirm and Send</button>
-            <button className="btn" onClick={() => setShowTransferPopup(false)}>Close</button>
+            <button className="btn" onClick={handleSend}>Send Document</button>
+            <button className="btn" onClick={() => setShowSendPopup(false)}>Close</button>
             <p>{message}</p>
           </div>
         </div>
@@ -382,7 +412,7 @@ function App() {
         <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="wallet-popup-content">
             <h2>Wallet Details</h2>
-            <p>User ID: {loggedInUser}</p>
+            <p>Owner ID: {loggedInUser}</p>
             <p>Public Address: {publicAddress}</p>
             <button className="btn" onClick={() => setShowUserDetailsPopup(false)}>Close</button>
           </div>

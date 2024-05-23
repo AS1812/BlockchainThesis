@@ -11,13 +11,15 @@ const walletSchema = new mongoose.Schema({
   publicAddress: { type: String, required: true, unique: true },
   documents: [{
     hash: String,
-    fileContent: Buffer, // Consider storing only the hash in blockchain, and file in a more secure storage
+    fileContent: Buffer,
     timestamp: Number,
-    fileName: String,  // New
-    fileType: String   // New
+    fileName: String,
+    fileType: String,
+    signatureId: { type: String, unique: true } // New field for signature ID
   }]
-  
 });
+
+
 
 const WalletModel = mongoose.model('Wallet', walletSchema);
 
@@ -141,6 +143,22 @@ class Blockchain {
   
     return document;
   }
+  async verifyDocument(documentHash) {
+    try {
+      // Iterate over the blocks in the chain
+      for (let block of this.chain) {
+        // Check if the block's data contains the document hash
+        if (block.data.hash === documentHash) {
+          return true; // Document hash found in the blockchain
+        }
+      }
+      return false; // Document hash not found in the blockchain
+    } catch (error) {
+      console.error('Error verifying document:', error);
+      throw new Error('Error verifying document');
+    }
+  }
+
   
 }
 

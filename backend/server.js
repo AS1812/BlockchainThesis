@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const { Block, Blockchain, WalletModel } = require('./blockchain');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const axios = require('axios');  // Add this line to import axios
+const formData = require('form-data');
+const Mailgun = require('mailgun-js');
 
 const app = express();
 const blockchain = new Blockchain();
@@ -13,7 +16,7 @@ app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
 // Connect to MongoDB
-mongoose.connect('mongodb://localhost:27017/blockchain', { useNewUrlParser: true, useUnifiedTopology: true });
+mongoose.connect('mongodb://localhost:27017/blockchain', {});
 
 // Create a new wallet
 app.post('/create-wallet', async (req, res) => {
@@ -67,9 +70,8 @@ app.post('/change-password', async (req, res) => {
   }
 });
 
-// Upload and sign a document
 app.post('/upload', async (req, res) => {
-  const { userId, password, fileContent, fileName, fileType } = req.body;  // Include fileName and fileType
+  const { userId, password, fileContent, fileName, fileType } = req.body;
   try {
     const validPassword = await blockchain.validatePassword(userId, password);
     if (!validPassword) {
@@ -79,16 +81,17 @@ app.post('/upload', async (req, res) => {
     const buffer = Buffer.from(fileContent, 'base64');
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     const wallet = await blockchain.getWallet(userId);
+    const signatureId = crypto.randomUUID(); // Generating a unique signature ID
 
     const existingDocument = wallet.documents.find(doc => doc.hash === hash);
     if (existingDocument) {
-      res.send({ message: 'Document already signed', hash });
+      res.send({ message: 'Document already signed', hash, signatureId: existingDocument.signatureId });
     } else {
       const newBlock = new Block(blockchain.chain.length, Date.now().toString(), { hash });
       await blockchain.addBlock(newBlock);
-      wallet.documents.push({ hash, fileContent: buffer, timestamp: Date.now(), fileName, fileType });  // Include fileName and fileType
+      wallet.documents.push({ hash, fileContent: buffer, timestamp: Date.now(), fileName, fileType, signatureId });
       await wallet.save();
-      res.send({ message: 'File uploaded and signed', hash });
+      res.send({ message: 'File uploaded and signed', hash, signatureId });
     }
   } catch (error) {
     console.error('Error uploading file:', error);
@@ -146,6 +149,72 @@ app.post('/transfer-document', async (req, res) => {
   }
 });
 
+const DOMAIN = 'sandbox4a6dbe30728e4d07acf8493ce1240d13.mailgun.org'; // Replace with your Mailgun domain
+const mg = Mailgun({ apiKey: '6b39e24da26dd0b49807501a479f44c9-a2dd40a3-42e3fa78', domain: DOMAIN });
+
+app.post('/send-document', async (req, res) => {
+  const { senderId, senderPassword, documentHash, email } = req.body;
+
+  // Validate email address
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).send({ message: 'Invalid email address' });
+  }
+
+  try {
+    const validPassword = await blockchain.validatePassword(senderId, senderPassword);
+    if (!validPassword) {
+      return res.status(401).send({ message: 'Invalid password' });
+    }
+
+    const wallet = await blockchain.getWallet(senderId);
+    const document = wallet.documents.find(doc => doc.hash === documentHash);
+    if (!document) {
+      return res.status(404).send({ message: 'Document not found' });
+    }
+
+    const attachmentBuffer = Buffer.from(document.fileContent, 'base64');
+
+    // Create form data for the email
+    const emailContent = new formData();
+    emailContent.append('from', 'no-reply@' + DOMAIN);
+    emailContent.append('to', email);
+    emailContent.append('subject', 'Document Details');
+    emailContent.append('html', `<h1>Document Details</h1>
+      <p><strong>Owner ID:</strong> ${wallet.userId}</p>
+      <p><strong>Signature ID:</strong> ${document.signatureId}</p>
+      <p><strong>Signature Date:</strong> ${new Date(document.timestamp).toLocaleDateString()}</p>
+      <p><strong>Document Hash:</strong> ${document.hash}</p>
+      <p><strong>File Name:</strong> ${document.fileName}</p>
+      <p><strong>File Type:</strong> ${document.fileType}</p>`);
+    emailContent.append('attachment', attachmentBuffer, { filename: document.fileName, contentType: document.fileType });
+
+    // Convert form data to headers and body for request
+    const emailOptions = {
+      method: 'POST',
+      url: `https://api.mailgun.net/v3/${DOMAIN}/messages`,
+      headers: {
+        ...emailContent.getHeaders(),
+        'Authorization': 'Basic ' + Buffer.from('api:' + mg.apiKey).toString('base64')
+      },
+      data: emailContent
+    };
+
+    const response = await axios(emailOptions);
+
+    if (response.status === 200) {
+      console.log('Email sent:', response.data);
+      res.send({ message: 'Email sent successfully' });
+    } else {
+      console.error('Error sending email:', response.data);
+      res.status(500).send({ message: 'Error sending email' });
+    }
+  } catch (error) {
+    console.error('Error processing request:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
 // Retrieve the blockchain
 app.get('/blocks', async (req, res) => {
   try {
@@ -181,6 +250,18 @@ app.post('/decode-file', async (req, res) => {
   } catch (error) {
     console.error('Error retrieving document:', error);
     res.status(500).send({ message: 'Error retrieving document' });
+  }
+});
+
+// Verify document integrity
+app.post('/verify-document', async (req, res) => {
+  const { documentHash } = req.body;
+  try {
+    const isValid = await blockchain.verifyDocument(documentHash); // Use the new method
+    res.send({ isValid });
+  } catch (error) {
+    console.error('Error verifying document:', error);
+    res.status(500).send({ message: 'Error verifying document' });
   }
 });
 
