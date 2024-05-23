@@ -1,7 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
-const { Block, Blockchain, Wallet, WalletModel } = require('./blockchain');
+const { Block, Blockchain, WalletModel } = require('./blockchain');
 const cors = require('cors');
 const mongoose = require('mongoose');
 
@@ -23,8 +23,8 @@ app.post('/create-wallet', async (req, res) => {
     if (existingWallet) {
       res.status(400).send({ message: 'This user ID already has a wallet' });
     } else {
-      await blockchain.addWallet(userId, password);
-      res.send({ message: 'Wallet created successfully', userId });
+      const wallet = await blockchain.addWallet(userId, password);
+      res.send({ message: 'Wallet created successfully', userId, publicAddress: wallet.publicAddress });
     }
   } catch (error) {
     console.error('Error creating wallet:', error);
@@ -38,7 +38,8 @@ app.post('/connect-wallet', async (req, res) => {
   try {
     const validPassword = await blockchain.validatePassword(userId, password);
     if (validPassword) {
-      res.send({ message: 'Wallet connected', userId });
+      const wallet = await blockchain.getWallet(userId);
+      res.send({ message: 'Wallet connected', userId, publicAddress: wallet.publicAddress });
     } else {
       res.status(404).send({ message: 'Invalid user ID or password' });
     }
@@ -68,14 +69,15 @@ app.post('/change-password', async (req, res) => {
 
 // Upload and sign a document
 app.post('/upload', async (req, res) => {
-  const { userId, password, fileContent } = req.body;
+  const { userId, password, fileContent, fileName, fileType } = req.body;  // Include fileName and fileType
   try {
     const validPassword = await blockchain.validatePassword(userId, password);
     if (!validPassword) {
       return res.status(404).send({ message: 'Invalid user ID or password' });
     }
 
-    const hash = crypto.createHash('sha256').update(fileContent).digest('hex');
+    const buffer = Buffer.from(fileContent, 'base64');
+    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     const wallet = await blockchain.getWallet(userId);
 
     const existingDocument = wallet.documents.find(doc => doc.hash === hash);
@@ -84,7 +86,7 @@ app.post('/upload', async (req, res) => {
     } else {
       const newBlock = new Block(blockchain.chain.length, Date.now().toString(), { hash });
       await blockchain.addBlock(newBlock);
-      wallet.documents.push({ hash, fileContent, timestamp: Date.now() });
+      wallet.documents.push({ hash, fileContent: buffer, timestamp: Date.now(), fileName, fileType });  // Include fileName and fileType
       await wallet.save();
       res.send({ message: 'File uploaded and signed', hash });
     }
@@ -132,6 +134,18 @@ app.post('/wallet/:userId/delete', async (req, res) => {
   }
 });
 
+// Transfer a document to another wallet
+app.post('/transfer-document', async (req, res) => {
+  const { senderId, senderPassword, documentHash, receiverPublicAddress } = req.body;
+  try {
+    const document = await blockchain.transferDocument(senderId, senderPassword, documentHash, receiverPublicAddress);
+    res.send({ message: 'Document transferred successfully', document });
+  } catch (error) {
+    console.error('Error transferring document:', error);
+    res.status(500).send({ message: error.message });
+  }
+});
+
 // Retrieve the blockchain
 app.get('/blocks', async (req, res) => {
   try {
@@ -140,6 +154,33 @@ app.get('/blocks', async (req, res) => {
   } catch (error) {
     console.error('Error retrieving blocks:', error);
     res.status(500).send({ message: 'Error retrieving blocks' });
+  }
+});
+
+// Decode and retrieve file content
+app.post('/decode-file', async (req, res) => {
+  const { userId, password, hash } = req.body;
+  try {
+    const validPassword = await blockchain.validatePassword(userId, password);
+    if (!validPassword) {
+      return res.status(404).send({ message: 'Invalid user ID or password' });
+    }
+
+    const wallet = await blockchain.getWallet(userId);
+    const document = wallet.documents.find(doc => doc.hash === hash);
+    if (!document) {
+      return res.status(404).send({ message: 'Document not found' });
+    }
+
+    res.send({
+      message: 'Document retrieved successfully',
+      fileContent: document.fileContent.toString('base64'),
+      fileName: document.fileName,
+      fileType: document.fileType || 'application/octet-stream' // Default to a generic binary type
+    });
+  } catch (error) {
+    console.error('Error retrieving document:', error);
+    res.status(500).send({ message: 'Error retrieving document' });
   }
 });
 

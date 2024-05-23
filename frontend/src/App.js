@@ -1,8 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
-
 import ParticlesComponent from './components/ParticlesBackground';
+import Modal from './components/Modal';
 
 function App() {
   const [file, setFile] = useState(null);
@@ -15,10 +15,13 @@ function App() {
   const [walletAction, setWalletAction] = useState('');
   const [showDocumentsPopup, setShowDocumentsPopup] = useState(false);
   const [loggedInUser, setLoggedInUser] = useState('');
+  const [publicAddress, setPublicAddress] = useState('');
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [showTransferPopup, setShowTransferPopup] = useState(false);
+  const [receiverPublicAddress, setReceiverPublicAddress] = useState('');
   const [darkMode, setDarkMode] = useState(false);
 
   const toggleDarkMode = useCallback(() => {
@@ -48,12 +51,16 @@ function App() {
     if (file) {
       const reader = new FileReader();
       reader.onload = async (e) => {
-        const content = e.target.result;
+        const content = e.target.result.split(',')[1];
+        const fileName = file.name;
+        const fileType = file.type;
         try {
           const response = await axios.post('http://localhost:3000/upload', {
             userId: loggedInUser,
             password,
-            fileContent: content
+            fileContent: content,
+            fileName,
+            fileType
           });
           setMessage(response.data.message);
           setHash(response.data.hash);
@@ -63,7 +70,7 @@ function App() {
           console.error(error);
         }
       };
-      reader.readAsText(file);
+      reader.readAsDataURL(file);
     } else {
       setMessage('Please select a file first');
     }
@@ -82,6 +89,7 @@ function App() {
       const response = await axios.post('http://localhost:3000/create-wallet', { userId, password });
       setMessage(response.data.message);
       setLoggedInUser(userId);
+      setPublicAddress(response.data.publicAddress);
       setShowWalletPopup(false);
     } catch (error) {
       if (error.response && error.response.data.message) {
@@ -98,6 +106,7 @@ function App() {
       const response = await axios.post('http://localhost:3000/connect-wallet', { userId, password });
       setMessage(response.data.message);
       setLoggedInUser(userId);
+      setPublicAddress(response.data.publicAddress);
       loadWallet(userId, password);
       setShowWalletPopup(false);
     } catch (error) {
@@ -115,8 +124,8 @@ function App() {
       try {
         await axios.post(`http://localhost:3000/wallet/${loggedInUser}/delete`, { password, hash });
         setMessage('Document deleted successfully');
-        loadWallet(loggedInUser, password);  // Refresh the wallet after deletion
-        setSelectedDocument(null);  // Reset selected document after deletion
+        loadWallet(loggedInUser, password);
+        setSelectedDocument(null);
       } catch (error) {
         setMessage('Error deleting document');
         console.error(error);
@@ -153,6 +162,76 @@ function App() {
       console.error(error);
     }
   }, [loggedInUser, oldPassword, newPassword]);
+
+  const handleTransfer = useCallback(async () => {
+    try {
+      const response = await axios.post('http://localhost:3000/transfer-document', {
+        senderId: loggedInUser,
+        senderPassword: password,
+        documentHash: selectedDocument.hash,
+        receiverPublicAddress
+      });
+  
+      // After successful transfer, refresh wallet documents
+      await loadWallet(loggedInUser, password);
+  
+      // Close any open document or popup views
+      setSelectedDocument(null);
+      setShowDocumentsPopup(true); // Assuming this controls visibility of the main wallet page
+      setShowTransferPopup(false);
+  
+      // Set and clear the transfer success message
+      setMessage(response.data.message);
+      setTimeout(() => {
+        setMessage('');
+      }, 4000); // Clear message after 4 seconds
+    } catch (error) {
+      setMessage('Error transferring document');
+      console.error(error);
+    }
+  }, [loggedInUser, password, loadWallet, selectedDocument, receiverPublicAddress]);
+  
+
+  const handleDecodeFile = useCallback(async (hash) => {
+    try {
+      const response = await axios.post('http://localhost:3000/decode-file', {
+        userId: loggedInUser,
+        password,
+        hash
+      });
+  
+      if (response.data.fileContent && response.data.fileName && response.data.fileType) {
+        const base64Data = response.data.fileContent;
+        const fileName = response.data.fileName;
+        const fileType = response.data.fileType;
+  
+        // Convert Base64 to binary data
+        const byteCharacters = atob(base64Data.replace(/^data:.+;base64,/, ''));
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: fileType });
+  
+        // Create a link element and trigger a download with the correct file name and type
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+  
+        setMessage(response.data.message);
+      } else {
+        setMessage('Failed to retrieve file details for download.');
+      }
+    } catch (error) {
+      setMessage('Error decoding file');
+      console.error(error);
+    }
+  }, [loggedInUser, password]);
+  
 
   return (
     <div className={`App ${darkMode ? 'dark-mode' : ''}`}>
@@ -246,13 +325,17 @@ function App() {
         <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="wallet-popup-content">
             <h2>Wallet Documents</h2>
+            <p>Public Address: {publicAddress}</p>
             {selectedDocument ? (
               <div className="wallet-document-details">
-                <p>Hash: {selectedDocument.hash}</p>
-                <p>Timestamp: {new Date(selectedDocument.timestamp).toLocaleString()}</p>
-                <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.hash)}>Delete</button>
-                <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
-              </div>
+              <p>Hash: {selectedDocument.hash}</p>
+              <p>Timestamp: {new Date(selectedDocument.timestamp).toLocaleString()}</p>
+              <p>Owner ID: {loggedInUser}</p> {/* Display owner ID; adjust as needed based on your data model */}
+              <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.hash)}>Delete</button>
+              <button className="btn" onClick={() => setShowTransferPopup(true)}>Send</button>
+              <button className="btn" onClick={() => handleDecodeFile(selectedDocument.hash)}>Download</button>
+              <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
+            </div>
             ) : (
               <ul>
                 {documents.map((doc, index) => (
@@ -264,6 +347,24 @@ function App() {
               </ul>
             )}
             <button className="btn" onClick={() => setShowDocumentsPopup(false)}>Close Wallet</button>
+          </div>
+        </div>
+      )}
+
+      {showTransferPopup && (
+        <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
+          <div className="wallet-popup-content">
+            <h2>Transfer Document</h2>
+            <input
+              type="text"
+              placeholder="Enter Receiver Public Address"
+              value={receiverPublicAddress}
+              onChange={(e) => setReceiverPublicAddress(e.target.value)}
+              className="input"
+            />
+            <button className="btn" onClick={handleTransfer}>Confirm and Send</button>
+            <button className="btn" onClick={() => setShowTransferPopup(false)}>Close</button>
+            <p>{message}</p>
           </div>
         </div>
       )}

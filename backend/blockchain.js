@@ -1,4 +1,3 @@
-
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 
@@ -9,7 +8,15 @@ mongoose.connect('mongodb://localhost:27017/blockchain', { useNewUrlParser: true
 const walletSchema = new mongoose.Schema({
   userId: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  documents: [{ hash: String, fileContent: String, timestamp: Number }]
+  publicAddress: { type: String, required: true, unique: true },
+  documents: [{
+    hash: String,
+    fileContent: Buffer, // Consider storing only the hash in blockchain, and file in a more secure storage
+    timestamp: Number,
+    fileName: String,  // New
+    fileType: String   // New
+  }]
+  
 });
 
 const WalletModel = mongoose.model('Wallet', walletSchema);
@@ -83,7 +90,8 @@ class Blockchain {
 
   async addWallet(userId, password) {
     const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
-    const wallet = new WalletModel({ userId, password: hashedPassword });
+    const publicAddress = crypto.createHash('sha256').update(userId + Date.now().toString()).digest('hex');
+    const wallet = new WalletModel({ userId, password: hashedPassword, publicAddress });
     await wallet.save();
     return wallet;
   }
@@ -92,31 +100,48 @@ class Blockchain {
     return await WalletModel.findOne({ userId });
   }
 
+  async getWalletByPublicAddress(publicAddress) {
+    return await WalletModel.findOne({ publicAddress });
+  }
+
   async validatePassword(userId, password) {
     const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
     const wallet = await WalletModel.findOne({ userId, password: hashedPassword });
     return wallet !== null;
   }
+
+  async transferDocument(senderId, senderPassword, documentHash, receiverPublicAddress) {
+    const senderWallet = await this.getWallet(senderId);
+    if (!senderWallet) {
+      throw new Error('Sender wallet not found');
+    }
+  
+    const validPassword = await this.validatePassword(senderId, senderPassword);
+    if (!validPassword) {
+      throw new Error('Invalid password');
+    }
+  
+    const document = senderWallet.documents.find(doc => doc.hash === documentHash);
+    if (!document) {
+      throw new Error('Document not found');
+    }
+  
+    const receiverWallet = await this.getWalletByPublicAddress(receiverPublicAddress);
+    if (!receiverWallet) {
+      throw new Error('Receiver wallet not found');
+    }
+  
+    // Remove the document from sender's wallet
+    senderWallet.documents = senderWallet.documents.filter(doc => doc.hash !== documentHash);
+    await senderWallet.save();
+  
+    // Add the document to receiver's wallet
+    receiverWallet.documents.push(document);
+    await receiverWallet.save();
+  
+    return document;
+  }
+  
 }
 
-class Wallet {
-  constructor(userId, password) {
-    this.userId = userId;
-    this.password = password;
-    this.documents = [];
-  }
-
-  addDocument(document) {
-    this.documents.push(document);
-  }
-
-  getDocuments() {
-    return this.documents;
-  }
-
-  findDocument(hash) {
-    return this.documents.find(doc => doc.hash === hash);
-  }
-}
-
-module.exports = { Block, Blockchain, Wallet, WalletModel };
+module.exports = { Block, Blockchain, WalletModel };
