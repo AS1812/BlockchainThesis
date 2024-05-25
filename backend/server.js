@@ -24,13 +24,13 @@ mongoose.connect('mongodb://localhost:27017/blockchain', { useNewUrlParser: true
 
 // Create a new wallet
 app.post('/create-wallet', async (req, res) => {
-  const { userId } = req.body;
+  const { userId, password } = req.body;
   try {
     const existingWallet = await blockchain.getWallet(userId);
     if (existingWallet) {
       res.status(400).send({ message: 'This user ID already has a wallet' });
     } else {
-      const wallet = await blockchain.addWallet(userId);
+      const wallet = await blockchain.addWallet(userId, password);
       res.send({ message: 'Wallet created successfully', userId, publicAddress: wallet.publicAddress });
     }
   } catch (error) {
@@ -41,14 +41,14 @@ app.post('/create-wallet', async (req, res) => {
 
 // Connect to the wallet
 app.post('/connect-wallet', async (req, res) => {
-  const { userId, privateKey } = req.body;
+  const { userId, password } = req.body;
   try {
-    const validPassword = await blockchain.validatePassword(userId, privateKey);
+    const validPassword = await blockchain.validatePassword(userId, password);
     if (validPassword) {
       const wallet = await blockchain.getWallet(userId);
       res.send({ message: 'Wallet connected', userId, publicAddress: wallet.publicAddress });
     } else {
-      res.status(404).send({ message: 'Invalid user ID or private key' });
+      res.status(404).send({ message: 'Invalid user ID or password' });
     }
   } catch (error) {
     console.error('Error connecting to wallet:', error);
@@ -74,22 +74,21 @@ app.post('/change-password', async (req, res) => {
   }
 });
 
-// Upload document to Pinata and sign it
+// Upload document to Pinata with blockchain signing
 app.post('/upload', async (req, res) => {
-  const { userId, privateKey, fileContent, fileName, fileType } = req.body;
+  const { userId, password, fileContent, fileName, fileType } = req.body;
   try {
-    const validPassword = await blockchain.validatePassword(userId, privateKey);
+    const validPassword = await blockchain.validatePassword(userId, password);
     if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or privateKey' });
+      return res.status(404).send({ message: 'Invalid user ID or password' });
     }
 
     const buffer = Buffer.from(fileContent, 'base64');
     const documentHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // Sign the document hash
+    // Sign the document hash with the user's wallet
     const signature = await blockchain.signDocument(userId, documentHash);
 
-    // Store file on Pinata
     const formData = new FormData();
     formData.append('file', buffer, { filename: fileName });
 
@@ -99,7 +98,6 @@ app.post('/upload', async (req, res) => {
         userId: userId,
         fileType: fileType,
         signature: signature,
-        documentHash: documentHash,
         timestamp: Date.now().toString()
       },
     });
@@ -118,9 +116,8 @@ app.post('/upload', async (req, res) => {
       }
     });
     const cid = response.data.IpfsHash;
-    const hash = cid; // Use the CID as the hash
 
-    res.send({ message: 'File uploaded and signed', hash, signature, documentHash, cid });
+    res.send({ message: 'File uploaded and signed', hash: documentHash, signature, cid });
   } catch (error) {
     console.error('Error uploading file:', error);
     res.status(500).send({ message: 'Error uploading file' });
@@ -152,9 +149,8 @@ app.get('/wallet/:userId/documents', async (req, res) => {
       cid: doc.ipfs_pin_hash,
       fileName: doc.metadata.name,
       fileType: doc.metadata.keyvalues.fileType,
-      signatureId: doc.metadata.keyvalues.signatureId,
+      signature: doc.metadata.keyvalues.signature,
       timestamp: parseInt(doc.metadata.keyvalues.timestamp, 10),
-      hash: doc.metadata.keyvalues.hash,
     })));
   } catch (error) {
     console.error('Error retrieving documents:', error);
@@ -177,7 +173,6 @@ app.post('/wallet/:userId/delete', async (req, res) => {
       return res.status(400).send({ message: 'CID is required' });
     }
 
-    // Delete from Pinata
     const response = await axios.delete(`https://api.pinata.cloud/pinning/unpin/${cid}`, {
       headers: {
         'Authorization': `Bearer ${pinataJWT}`,
@@ -288,7 +283,6 @@ app.post('/send-document', async (req, res) => {
     res.status(500).send({ message: 'Internal server error' });
   }
 });
-
 
 const PORT = 3000;
 app.listen(PORT, () => {
