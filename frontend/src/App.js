@@ -7,7 +7,7 @@ import Modal from './components/Modal';
 function App() {
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState('');
-  const [hash, setHash] = useState('');
+  const [cid, setCid] = useState('');
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [documents, setDocuments] = useState([]);
@@ -20,11 +20,11 @@ function App() {
   const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [showSendPopup, setShowSendPopup] = useState(false); // Renamed
-  const [email, setEmail] = useState(''); // New state for email
+  const [showSendPopup, setShowSendPopup] = useState(false);
+  const [email, setEmail] = useState('');
   const [darkMode, setDarkMode] = useState(false);
   const [showUserDetailsPopup, setShowUserDetailsPopup] = useState(false);
-  const [sendMessage, setSendMessage] = useState(''); // New state for send message
+  const [sendMessage, setSendMessage] = useState('');
 
   const toggleDarkMode = useCallback(() => {
     setDarkMode((prevMode) => !prevMode);
@@ -36,7 +36,7 @@ function App() {
 
   const loadWallet = useCallback(async (userId, password) => {
     try {
-      const response = await axios.get(`http://localhost:3000/wallet/${userId}?password=${password}`);
+      const response = await axios.get(`http://localhost:3000/wallet/${userId}/documents?password=${password}`);
       setDocuments(response.data);
     } catch (error) {
       setMessage('Error loading wallet');
@@ -52,13 +52,12 @@ function App() {
       return () => clearInterval(interval);
     }
   }, [loggedInUser, password, loadWallet]);
-
   const handleUpload = useCallback(async () => {
     if (!loggedInUser) {
       setMessage('Please log in to a wallet first');
       return;
     }
-
+  
     if (file) {
       const reader = new FileReader();
       reader.onload = async (e) => {
@@ -74,7 +73,7 @@ function App() {
             fileType
           });
           setMessage(response.data.message);
-          setHash(response.data.hash);
+          setCid(response.data.cid);
           loadWallet(loggedInUser, password);
         } catch (error) {
           setMessage('Error uploading file');
@@ -86,6 +85,7 @@ function App() {
       setMessage('Please select a file first');
     }
   }, [file, loggedInUser, password, loadWallet]);
+  
 
   const openWalletPopup = useCallback((action) => {
     setMessage('');
@@ -130,10 +130,10 @@ function App() {
     }
   }, [userId, password, loadWallet]);
 
-  const deleteDocument = useCallback(async (hash) => {
+  const deleteDocument = useCallback(async (cid) => {
     if (window.confirm('Are you sure you want to delete this document?')) {
       try {
-        await axios.post(`http://localhost:3000/wallet/${loggedInUser}/delete`, { password, hash });
+        await axios.post(`http://localhost:3000/wallet/${loggedInUser}/delete`, { password, cid });
         setMessage('Document deleted successfully');
         loadWallet(loggedInUser, password);
         setSelectedDocument(null);
@@ -179,19 +179,19 @@ function App() {
       setMessage('Invalid email address');
       return;
     }
-  
+
     try {
       const response = await axios.post('http://localhost:3000/send-document', {
         senderId: loggedInUser,
         senderPassword: password,
-        documentHash: selectedDocument.hash,
+        documentCid: selectedDocument.cid,
         email
       });
-  
+
       // Close any open document or popup views
       setSelectedDocument(null);
       setShowSendPopup(false);
-  
+
       // Set send success message
       setSendMessage(`Document sent successfully to ${email}`);
     } catch (error) {
@@ -199,48 +199,43 @@ function App() {
       console.error(error);
     }
   }, [loggedInUser, password, selectedDocument, email]);
-  
 
-  const handleDecodeFile = useCallback(async (hash) => {
+  const handleDownloadFile = useCallback(async (cid) => {
     try {
-      const response = await axios.post('http://localhost:3000/decode-file', {
-        userId: loggedInUser,
-        password,
-        hash
+      const response = await axios.get(`http://localhost:3000/download-file?cid=${cid}`, {
+        responseType: 'blob', // Important for file download
       });
-
-      if (response.data.fileContent && response.data.fileName && response.data.fileType) {
-        const base64Data = response.data.fileContent;
-        const fileName = response.data.fileName;
-        const fileType = response.data.fileType;
-
-        // Convert Base64 to binary data
-        const byteCharacters = atob(base64Data.replace(/^data:.+;base64,/, ''));
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
+  
+      const contentDisposition = response.headers['content-disposition'];
+      console.log('Content-Disposition:', contentDisposition); // Debugging line
+  
+      let fileName = 'downloaded_file';
+  
+      if (contentDisposition) {
+        // Try to match both standard and RFC 6266 formats
+        const fileNameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?['"]?([^;'"]+)['"]?/i);
+        if (fileNameMatch && fileNameMatch[1]) {
+          fileName = decodeURIComponent(fileNameMatch[1].replace(/['"]/g, ''));
         }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: fileType });
-
-        // Create a link element and trigger a download with the correct file name and type
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        setMessage(response.data.message);
-      } else {
-        setMessage('Failed to retrieve file details for download.');
       }
+  
+      const blob = new Blob([response.data], { type: response.headers['content-type'] });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  
+      setMessage('File downloaded successfully');
     } catch (error) {
-      setMessage('Error decoding file');
+      setMessage('Error downloading file');
       console.error(error);
     }
-  }, [loggedInUser, password]);
-
+  }, []);
+  
+  
+  
   const showUserDetails = useCallback(() => {
     setShowUserDetailsPopup(true);
   }, []);
@@ -275,7 +270,7 @@ function App() {
             </div>
             <button className="btn" onClick={() => setShowDocumentsPopup(true)}>Show Wallet</button>
             <p>{message}</p>
-            {hash && <p>Hash: {hash}</p>}
+            {cid &&  <p>CID: {cid}</p>}
           </>
         )}
       </header>
@@ -355,13 +350,13 @@ function App() {
             {selectedDocument ? (
               <div className="wallet-document-details">
                 <h2>{selectedDocument.fileName}</h2>
-                <p>Hash: {selectedDocument.hash}</p>
+                <p>CID: {selectedDocument.cid}</p>
                 <p>Timestamp: {new Date(selectedDocument.timestamp).toLocaleString()}</p>
                 <p>Owner ID: {loggedInUser}</p>
                 <div className="btn-group">
-                  <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.hash)}>Delete</button>
+                  <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.cid)}>Delete</button>
                   <button className="btn" onClick={() => setShowSendPopup(true)}>Send</button>
-                  <button className="btn" onClick={() => handleDecodeFile(selectedDocument.hash)}>Download</button>
+                  <button className="btn" onClick={() => handleDownloadFile(selectedDocument.cid)}>Download</button>
                   <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
                   <button className="btn" onClick={() => verifyDocumentIntegrity(selectedDocument.hash)}>Verify Integrity</button>
                 </div>

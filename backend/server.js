@@ -1,12 +1,17 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
-const { Block, Blockchain, WalletModel } = require('./blockchain');
+const { Blockchain } = require('./blockchain');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const axios = require('axios');  // Add this line to import axios
-const formData = require('form-data');
-const Mailgun = require('mailgun-js');
+const axios = require('axios');
+const FormData = require('form-data');
+const mailgun = require('mailgun-js');
+
+// Pinata API JWT
+const pinataJWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiIyNjI4NjhkYi1lYmVhLTQxZjYtODM1ZS00YWY5YTk2NWRkMzIiLCJlbWFpbCI6ImFuZHJlaS5uaWN1bGFAeWFob28uY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siaWQiOiJGUkExIiwiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjF9LHsiaWQiOiJOWUMxIiwiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjF9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6IjUyMzJjMTgxZTRjMjBkNmY4YWY5Iiwic2NvcGVkS2V5U2VjcmV0IjoiYjA4MDU5ZDQ1OTQ1OTAzYzIyYjc1N2JlZjUxZDk5NTdhYTY3NjI0Yzk0ZTM2M2RmOWY2OGI0MGFjZjllYjc0OSIsImlhdCI6MTcxNjYzMDk0M30.tJryPC7DwJK9ZceeuwkRkTjhwPiqTkUp1uM0LqM41R4';
+const DOMAIN = 'sandbox4a6dbe30728e4d07acf8493ce1240d13.mailgun.org';
+const mg = mailgun({ apiKey: '6b39e24da26dd0b49807501a479f44c9-a2dd40a3-42e3fa78', domain: DOMAIN });
 
 const app = express();
 const blockchain = new Blockchain();
@@ -15,18 +20,17 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
-// Connect to MongoDB
-mongoose.connect('mongodb://localhost:27017/blockchain', {});
+mongoose.connect('mongodb://localhost:27017/blockchain', { useNewUrlParser: true, useUnifiedTopology: true });
 
 // Create a new wallet
 app.post('/create-wallet', async (req, res) => {
-  const { userId, password } = req.body;
+  const { userId } = req.body;
   try {
     const existingWallet = await blockchain.getWallet(userId);
     if (existingWallet) {
       res.status(400).send({ message: 'This user ID already has a wallet' });
     } else {
-      const wallet = await blockchain.addWallet(userId, password);
+      const wallet = await blockchain.addWallet(userId);
       res.send({ message: 'Wallet created successfully', userId, publicAddress: wallet.publicAddress });
     }
   } catch (error) {
@@ -37,14 +41,14 @@ app.post('/create-wallet', async (req, res) => {
 
 // Connect to the wallet
 app.post('/connect-wallet', async (req, res) => {
-  const { userId, password } = req.body;
+  const { userId, privateKey } = req.body;
   try {
-    const validPassword = await blockchain.validatePassword(userId, password);
+    const validPassword = await blockchain.validatePassword(userId, privateKey);
     if (validPassword) {
       const wallet = await blockchain.getWallet(userId);
       res.send({ message: 'Wallet connected', userId, publicAddress: wallet.publicAddress });
     } else {
-      res.status(404).send({ message: 'Invalid user ID or password' });
+      res.status(404).send({ message: 'Invalid user ID or private key' });
     }
   } catch (error) {
     console.error('Error connecting to wallet:', error);
@@ -70,29 +74,53 @@ app.post('/change-password', async (req, res) => {
   }
 });
 
+// Upload document to Pinata and sign it
 app.post('/upload', async (req, res) => {
-  const { userId, password, fileContent, fileName, fileType } = req.body;
+  const { userId, privateKey, fileContent, fileName, fileType } = req.body;
   try {
-    const validPassword = await blockchain.validatePassword(userId, password);
+    const validPassword = await blockchain.validatePassword(userId, privateKey);
     if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or password' });
+      return res.status(404).send({ message: 'Invalid user ID or privateKey' });
     }
 
     const buffer = Buffer.from(fileContent, 'base64');
-    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-    const wallet = await blockchain.getWallet(userId);
-    const signatureId = crypto.randomUUID(); // Generating a unique signature ID
+    const documentHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    const existingDocument = wallet.documents.find(doc => doc.hash === hash);
-    if (existingDocument) {
-      res.send({ message: 'Document already signed', hash, signatureId: existingDocument.signatureId });
-    } else {
-      const newBlock = new Block(blockchain.chain.length, Date.now().toString(), { hash });
-      await blockchain.addBlock(newBlock);
-      wallet.documents.push({ hash, fileContent: buffer, timestamp: Date.now(), fileName, fileType, signatureId });
-      await wallet.save();
-      res.send({ message: 'File uploaded and signed', hash, signatureId });
-    }
+    // Sign the document hash
+    const signature = await blockchain.signDocument(userId, documentHash);
+
+    // Store file on Pinata
+    const formData = new FormData();
+    formData.append('file', buffer, { filename: fileName });
+
+    const pinataMetadata = JSON.stringify({
+      name: fileName,
+      keyvalues: {
+        userId: userId,
+        fileType: fileType,
+        signature: signature,
+        documentHash: documentHash,
+        timestamp: Date.now().toString()
+      },
+    });
+    formData.append('pinataMetadata', pinataMetadata);
+
+    const pinataOptions = JSON.stringify({
+      cidVersion: 0,
+    });
+    formData.append('pinataOptions', pinataOptions);
+
+    const response = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", formData, {
+      maxBodyLength: "Infinity",
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${formData._boundary}`,
+        'Authorization': `Bearer ${pinataJWT}`
+      }
+    });
+    const cid = response.data.IpfsHash;
+    const hash = cid; // Use the CID as the hash
+
+    res.send({ message: 'File uploaded and signed', hash, signature, documentHash, cid });
   } catch (error) {
     console.error('Error uploading file:', error);
     res.status(500).send({ message: 'Error uploading file' });
@@ -100,60 +128,112 @@ app.post('/upload', async (req, res) => {
 });
 
 // Retrieve wallet documents
-app.get('/wallet/:userId', async (req, res) => {
+app.get('/wallet/:userId/documents', async (req, res) => {
   const { userId } = req.params;
-  const { password } = req.query;  // Note: Use query parameters for GET requests
+  const { password } = req.query;
   try {
     const validPassword = await blockchain.validatePassword(userId, password);
     if (!validPassword) {
       return res.status(404).send({ message: 'Invalid user ID or password' });
     }
 
-    const wallet = await blockchain.getWallet(userId);
-    res.json(wallet.documents);
+    const response = await axios.get("https://api.pinata.cloud/data/pinList", {
+      headers: {
+        'Authorization': `Bearer ${pinataJWT}`
+      },
+      params: {
+        status: 'pinned',
+        'metadata[keyvalues][userId][value]': userId,
+        'metadata[keyvalues][userId][op]': 'eq'
+      }
+    });
+
+    res.json(response.data.rows.map(doc => ({
+      cid: doc.ipfs_pin_hash,
+      fileName: doc.metadata.name,
+      fileType: doc.metadata.keyvalues.fileType,
+      signatureId: doc.metadata.keyvalues.signatureId,
+      timestamp: parseInt(doc.metadata.keyvalues.timestamp, 10),
+      hash: doc.metadata.keyvalues.hash,
+    })));
   } catch (error) {
-    console.error('Error retrieving wallet:', error);
-    res.status(500).send({ message: 'Error retrieving wallet' });
+    console.error('Error retrieving documents:', error);
+    res.status(500).send({ message: 'Error retrieving documents' });
   }
 });
 
-// Delete a document from the wallet
+// Delete a document from Pinata
 app.post('/wallet/:userId/delete', async (req, res) => {
   const { userId } = req.params;
-  const { password, hash } = req.body;
+  const { password, cid } = req.body;
+
   try {
     const validPassword = await blockchain.validatePassword(userId, password);
     if (!validPassword) {
       return res.status(404).send({ message: 'Invalid user ID or password' });
     }
 
-    const wallet = await blockchain.getWallet(userId);
-    wallet.documents = wallet.documents.filter(doc => doc.hash !== hash);
-    await wallet.save();
-    res.send({ message: 'Document deleted successfully' });
+    if (!cid) {
+      return res.status(400).send({ message: 'CID is required' });
+    }
+
+    // Delete from Pinata
+    const response = await axios.delete(`https://api.pinata.cloud/pinning/unpin/${cid}`, {
+      headers: {
+        'Authorization': `Bearer ${pinataJWT}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.status === 200) {
+      res.send({ message: 'Document deleted successfully' });
+    } else {
+      res.status(response.status).send({ message: 'Error deleting document from Pinata', error: response.data });
+    }
   } catch (error) {
     console.error('Error deleting document:', error);
     res.status(500).send({ message: 'Error deleting document' });
   }
 });
 
-// Transfer a document to another wallet
-app.post('/transfer-document', async (req, res) => {
-  const { senderId, senderPassword, documentHash, receiverPublicAddress } = req.body;
+// Download file from IPFS
+app.get('/download-file', async (req, res) => {
+  const { cid } = req.query;
+
   try {
-    const document = await blockchain.transferDocument(senderId, senderPassword, documentHash, receiverPublicAddress);
-    res.send({ message: 'Document transferred successfully', document });
+    const response = await axios.get(`https://gateway.pinata.cloud/ipfs/${cid}`, {
+      responseType: 'arraybuffer',
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'Authorization': `Bearer ${pinataJWT}`
+      }
+    });
+
+    if (response.status === 200) {
+      const fileType = response.headers['content-type'];
+      const fileName = `${cid}.${fileType.split('/')[1]}`;
+
+      res.set({
+        'Content-Type': fileType,
+        'Content-Disposition': `attachment; filename=${fileName}`
+      });
+
+      res.send(response.data);
+    } else {
+      res.status(response.status).send({ message: 'Failed to retrieve file details for download.', error: response.data });
+    }
   } catch (error) {
-    console.error('Error transferring document:', error);
-    res.status(500).send({ message: error.message });
+    console.error('Error downloading file:', error);
+    res.status(500).send({ message: 'Error downloading file' });
   }
 });
 
-const DOMAIN = 'sandbox4a6dbe30728e4d07acf8493ce1240d13.mailgun.org'; // Replace with your Mailgun domain
-const mg = Mailgun({ apiKey: '6b39e24da26dd0b49807501a479f44c9-a2dd40a3-42e3fa78', domain: DOMAIN });
-
 app.post('/send-document', async (req, res) => {
-  const { senderId, senderPassword, documentHash, email } = req.body;
+  const { senderId, senderPassword, documentCid, email } = req.body;
+
+  if (!documentCid) {
+    return res.status(400).send({ message: 'Document CID is required' });
+  }
 
   // Validate email address
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -167,47 +247,41 @@ app.post('/send-document', async (req, res) => {
       return res.status(401).send({ message: 'Invalid password' });
     }
 
-    const wallet = await blockchain.getWallet(senderId);
-    const document = wallet.documents.find(doc => doc.hash === documentHash);
-    if (!document) {
-      return res.status(404).send({ message: 'Document not found' });
-    }
-
-    const attachmentBuffer = Buffer.from(document.fileContent, 'base64');
-
-    // Create form data for the email
-    const emailContent = new formData();
-    emailContent.append('from', 'no-reply@' + DOMAIN);
-    emailContent.append('to', email);
-    emailContent.append('subject', 'Document Details');
-    emailContent.append('html', `<h1>Document Details</h1>
-      <p><strong>Owner ID:</strong> ${wallet.userId}</p>
-      <p><strong>Signature ID:</strong> ${document.signatureId}</p>
-      <p><strong>Signature Date:</strong> ${new Date(document.timestamp).toLocaleDateString()}</p>
-      <p><strong>Document Hash:</strong> ${document.hash}</p>
-      <p><strong>File Name:</strong> ${document.fileName}</p>
-      <p><strong>File Type:</strong> ${document.fileType}</p>`);
-    emailContent.append('attachment', attachmentBuffer, { filename: document.fileName, contentType: document.fileType });
-
-    // Convert form data to headers and body for request
-    const emailOptions = {
-      method: 'POST',
-      url: `https://api.mailgun.net/v3/${DOMAIN}/messages`,
+    const response = await axios.get(`https://gateway.pinata.cloud/ipfs/${documentCid}`, {
+      responseType: 'arraybuffer',
       headers: {
-        ...emailContent.getHeaders(),
-        'Authorization': 'Basic ' + Buffer.from('api:' + mg.apiKey).toString('base64')
-      },
-      data: emailContent
-    };
-
-    const response = await axios(emailOptions);
+        'Authorization': `Bearer ${pinataJWT}`
+      }
+    });
 
     if (response.status === 200) {
-      console.log('Email sent:', response.data);
-      res.send({ message: 'Email sent successfully' });
+      const fileName = `${documentCid}.pdf`;
+
+      const emailData = {
+        from: `no-reply@${DOMAIN}`,
+        to: email,
+        subject: 'Document Details',
+        html: `<h1>Document Details</h1>
+          <p><strong>Owner ID:</strong> ${senderId}</p>
+          <p><strong>Document CID:</strong> ${documentCid}</p>
+          <p><strong>File Name:</strong> ${fileName}</p>`,
+        attachment: {
+          data: response.data,
+          filename: fileName,
+        }
+      };
+
+      mg.messages().send(emailData, (error, body) => {
+        if (error) {
+          console.error('Error sending email:', error);
+          res.status(500).send({ message: 'Error sending email' });
+        } else {
+          console.log('Email sent:', body);
+          res.send({ message: 'Email sent successfully' });
+        }
+      });
     } else {
-      console.error('Error sending email:', response.data);
-      res.status(500).send({ message: 'Error sending email' });
+      res.status(response.status).send({ message: 'Failed to retrieve document from IPFS.', error: response.data });
     }
   } catch (error) {
     console.error('Error processing request:', error);
@@ -215,55 +289,6 @@ app.post('/send-document', async (req, res) => {
   }
 });
 
-// Retrieve the blockchain
-app.get('/blocks', async (req, res) => {
-  try {
-    const chain = await BlockModel.find().sort({ index: 1 });
-    res.json(chain);
-  } catch (error) {
-    console.error('Error retrieving blocks:', error);
-    res.status(500).send({ message: 'Error retrieving blocks' });
-  }
-});
-
-// Decode and retrieve file content
-app.post('/decode-file', async (req, res) => {
-  const { userId, password, hash } = req.body;
-  try {
-    const validPassword = await blockchain.validatePassword(userId, password);
-    if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or password' });
-    }
-
-    const wallet = await blockchain.getWallet(userId);
-    const document = wallet.documents.find(doc => doc.hash === hash);
-    if (!document) {
-      return res.status(404).send({ message: 'Document not found' });
-    }
-
-    res.send({
-      message: 'Document retrieved successfully',
-      fileContent: document.fileContent.toString('base64'),
-      fileName: document.fileName,
-      fileType: document.fileType || 'application/octet-stream' // Default to a generic binary type
-    });
-  } catch (error) {
-    console.error('Error retrieving document:', error);
-    res.status(500).send({ message: 'Error retrieving document' });
-  }
-});
-
-// Verify document integrity
-app.post('/verify-document', async (req, res) => {
-  const { documentHash } = req.body;
-  try {
-    const isValid = await blockchain.verifyDocument(documentHash); // Use the new method
-    res.send({ isValid });
-  } catch (error) {
-    console.error('Error verifying document:', error);
-    res.status(500).send({ message: 'Error verifying document' });
-  }
-});
 
 const PORT = 3000;
 app.listen(PORT, () => {
