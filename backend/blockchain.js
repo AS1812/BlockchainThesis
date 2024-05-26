@@ -1,11 +1,11 @@
-const { Web3 = require('web3');
+const { Web3 } = require('web3');
 const { abi } = require('./artifacts/contracts/FileStorage.sol/FileStorage.json');
 
 const ganacheURL = 'http://127.0.0.1:8545';
 const web3 = new Web3(new Web3.providers.HttpProvider(ganacheURL));
 
 // Replace with your deployed contract address
-const contractAddress = '0x95d3f5411e42C2216Bd3fa77991A2c349Cbe2085';
+const contractAddress = '0xB2078FdE2C5dFbAE98Ad1d3D9874f05536279EF2';
 const fileStorageContract = new web3.eth.Contract(abi, contractAddress);
 
 class Blockchain {
@@ -44,20 +44,25 @@ class Blockchain {
 
   async signDocument(privateKey, documentHash) {
     const validPrivateKey = this.validatePrivateKey(privateKey);
-    const signedMessage = web3.eth.accounts.sign(documentHash, validPrivateKey);
-    return signedMessage.signature;
+    const account = web3.eth.accounts.privateKeyToAccount(validPrivateKey);
+    const message = web3.utils.soliditySha3(documentHash); // Ensure this matches the expected message hash format
+    const signedMessage = await account.sign(message);
+    const timestamp = Math.floor(Date.now() / 1000); // Timestamp in seconds
+  
+    return { signature: signedMessage.signature, timestamp };
   }
 
-  async uploadFile(privateKey, cid, fileName, fileType, signature) {
-    const account = web3.eth.accounts.privateKeyToAccount(privateKey);
+  async uploadFile(privateKey, cid, fileName, fileType, signature, hash, timestamp) {
+    const validPrivateKey = this.validatePrivateKey(privateKey);
+    const account = web3.eth.accounts.privateKeyToAccount(validPrivateKey);
     web3.eth.accounts.wallet.add(account);
 
     console.log(`Uploading file to blockchain from account: ${account.address}`);
 
-    const gasEstimate = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature).estimateGas({ from: account.address });
+    const gasEstimate = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature, hash, timestamp).estimateGas({ from: account.address });
     console.log(`Estimated gas: ${gasEstimate}`);
 
-    const result = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature).send({
+    const result = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature, hash, timestamp).send({
       from: account.address,
       gas: gasEstimate
     });
@@ -73,8 +78,29 @@ class Blockchain {
       fileName: file.fileName,
       fileType: file.fileType,
       signature: file.signature,
-      timestamp: file.timestamp.toString() // Convert BigInt to string
+      timestamp: parseInt(file.timestamp), // Convert string to integer
+      hash: file.hash,
+      hidden: file.hidden
     }));
+  }
+
+  async hideFile(privateKey, cid) {
+    const validPrivateKey = this.validatePrivateKey(privateKey);
+    const account = web3.eth.accounts.privateKeyToAccount(validPrivateKey);
+    web3.eth.accounts.wallet.add(account);
+
+    console.log(`Hiding file from account: ${account.address}`);
+
+    const gasEstimate = await fileStorageContract.methods.hideFile(cid).estimateGas({ from: account.address });
+    console.log(`Estimated gas: ${gasEstimate}`);
+
+    const result = await fileStorageContract.methods.hideFile(cid).send({
+      from: account.address,
+      gas: gasEstimate
+    });
+
+    console.log('Transaction result:', result);
+    return result;
   }
 }
 

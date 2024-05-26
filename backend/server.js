@@ -1,9 +1,14 @@
+const { Web3 } = require('web3');
+const ganacheURL = 'http://127.0.0.1:8545';
+const web3 = new Web3(new Web3.providers.HttpProvider(ganacheURL));
+
+
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
 const { Blockchain } = require('./blockchain');
 const cors = require('cors');
-const mongoose = require('mongoose');
 const axios = require('axios');
 const FormData = require('form-data');
 const mailgun = require('mailgun-js');
@@ -18,17 +23,6 @@ const blockchain = new Blockchain();
 app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
-
-
-app.post('/create-wallet', async (req, res) => {
-  try {
-    const account = await blockchain.createAccount();
-    res.send({ message: 'Wallet created successfully', publicAddress: account.address, privateKey: account.privateKey });
-  } catch (error) {
-    console.error('Error creating wallet:', error);
-    res.status(500).send({ message: 'Error creating wallet' });
-  }
-});
 
 app.post('/connect-wallet', async (req, res) => {
   const { privateKey } = req.body;
@@ -50,8 +44,7 @@ app.post('/upload', async (req, res) => {
   try {
     const buffer = Buffer.from(fileContent, 'base64');
     const documentHash = crypto.createHash('sha256').update(buffer).digest('hex');
-
-    const signature = await blockchain.signDocument(privateKey, documentHash);
+    const { signature, timestamp } = await blockchain.signDocument(privateKey, documentHash);
 
     const formData = new FormData();
     formData.append('file', buffer, { filename: fileName });
@@ -61,7 +54,8 @@ app.post('/upload', async (req, res) => {
       keyvalues: {
         fileType: fileType,
         signature: signature,
-        timestamp: Date.now().toString()
+        hash: documentHash,
+        timestamp: timestamp.toString()
       },
     });
     formData.append('pinataMetadata', pinataMetadata);
@@ -82,26 +76,38 @@ app.post('/upload', async (req, res) => {
 
     console.log('Uploading file to blockchain with CID:', cid);
 
-    await blockchain.uploadFile(privateKey, cid, fileName, fileType, signature);
+    await blockchain.uploadFile(privateKey, cid, fileName, fileType, signature, documentHash, timestamp);
 
-    res.send({ message: 'File uploaded and signed', hash: documentHash, signature, cid });
+    res.send({ message: 'File uploaded and signed', hash: documentHash, signature, cid, timestamp });
   } catch (error) {
     console.error('Error uploading file:', error);
     res.status(500).send({ message: 'Error uploading file' });
   }
 });
 
+
 app.get('/wallet/:publicAddress/documents', async (req, res) => {
   const { publicAddress } = req.params;
   try {
     const files = await blockchain.getFiles(publicAddress);
-    res.json(files); // Use res.json to handle JSON serialization
+    const visibleFiles = files.filter(file => !file.hidden); // Filter out hidden files
+    res.json(visibleFiles);
   } catch (error) {
     console.error('Error loading wallet:', error);
     res.status(500).send({ message: 'Error loading wallet' });
   }
 });
 
+app.post('/wallet/:publicAddress/hide', async (req, res) => {
+  const { privateKey, cid } = req.body;
+  try {
+    await blockchain.hideFile(privateKey, cid);
+    res.send({ message: 'Document hidden successfully' });
+  } catch (error) {
+    console.error('Error hiding document:', error);
+    res.status(500).send({ message: 'Error hiding document' });
+  }
+});
 
 // Download file from IPFS
 app.get('/download-file', async (req, res) => {
@@ -136,7 +142,7 @@ app.get('/download-file', async (req, res) => {
 });
 
 app.post('/send-document', async (req, res) => {
-  const { senderId, senderPassword, documentCid, email } = req.body;
+  const { senderId, documentCid, email } = req.body;
 
   if (!documentCid) {
     return res.status(400).send({ message: 'Document CID is required' });
@@ -190,6 +196,20 @@ app.post('/send-document', async (req, res) => {
     res.status(500).send({ message: 'Internal server error' });
   }
 });
+
+app.post('/verify-signature', (req, res) => {
+  const { documentHash, signature, publicAddress } = req.body;
+
+  const message = web3.utils.sha3(`\x19Ethereum Signed Message:\n${documentHash.length}${documentHash}`);
+  const signer = web3.eth.accounts.recover(message, signature);
+
+  if (signer.toLowerCase() === publicAddress.toLowerCase()) {
+    res.send({ message: 'Signature is valid', valid: true, documentHash, signature, publicAddress });
+  } else {
+    res.send({ message: 'Signature is invalid', valid: false });
+  }
+});
+
 
 const PORT = 3000;
 app.listen(PORT, () => {

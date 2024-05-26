@@ -277,3 +277,53 @@ input:checked + .slider:before {
   transform: translateX(26px);
 }
 
+/* Styles for the verification popup */
+.verification-popup-content {
+  width: auto; /* Allow the width to adjust based on content */
+  max-width: 90%; /* Ensure it doesn't exceed the viewport width */
+  padding: 20px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  margin: 0 auto; /* Center the popup */
+}
+
+.verification-details {
+  margin-top: 20px;
+}
+
+.verification-details p {
+  margin: 10px 0;
+  font-size: 18px;
+}
+
+.verified {
+  color: green;
+  font-weight: bold;
+  margin-right: 10px;
+}
+
+.spinner-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100px;
+}
+
+.loading-spinner {
+  border: 4px solid rgba(0, 0, 0, 0.1);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border-left-color: #09f;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}

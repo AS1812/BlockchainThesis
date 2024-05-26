@@ -3,17 +3,16 @@ import axios from 'axios';
 import './App.css';
 import ParticlesComponent from './components/ParticlesBackground';
 import Modal from './components/Modal';
+import LoadingSpinner from './components/LoadingSpinner'; // Create this component to show a loading spinner
 
 function App() {
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState('');
-  const [cid, setCid] = useState('');
   const [publicAddress, setPublicAddress] = useState('');
   const [privateKey, setPrivateKey] = useState('');
   const [balance, setBalance] = useState('');
   const [documents, setDocuments] = useState([]);
   const [showWalletPopup, setShowWalletPopup] = useState(false);
-  const [walletAction, setWalletAction] = useState('');
   const [showDocumentsPopup, setShowDocumentsPopup] = useState(false);
   const [loggedInUser, setLoggedInUser] = useState('');
   const [selectedDocument, setSelectedDocument] = useState(null);
@@ -22,6 +21,10 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [showUserDetailsPopup, setShowUserDetailsPopup] = useState(false);
   const [sendMessage, setSendMessage] = useState('');
+  const [verificationMessage, setVerificationMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [verifiedData, setVerifiedData] = useState(null);
+  const [showVerificationPopup, setShowVerificationPopup] = useState(false);
 
   const toggleDarkMode = useCallback(() => {
     setDarkMode((prevMode) => !prevMode);
@@ -61,7 +64,6 @@ function App() {
             fileType
           });
           setMessage(response.data.message);
-          setCid(response.data.cid);
           loadWallet(publicAddress);
         } catch (error) {
           setMessage('Error uploading file');
@@ -74,27 +76,9 @@ function App() {
     }
   }, [file, loggedInUser, privateKey, publicAddress, loadWallet]);
 
-  const openWalletPopup = useCallback((action) => {
+  const openWalletPopup = useCallback(() => {
     setMessage('');
     setShowWalletPopup(true);
-  }, []);
-
-  const handleCreateWallet = useCallback(async () => {
-    try {
-      const response = await axios.post('http://localhost:3000/create-wallet');
-      setMessage(response.data.message);
-      setLoggedInUser(response.data.publicAddress);
-      setPublicAddress(response.data.publicAddress);
-      setPrivateKey(response.data.privateKey);
-      setShowWalletPopup(false);
-    } catch (error) {
-      if (error.response && error.response.data.message) {
-        setMessage(error.response.data.message);
-      } else {
-        setMessage('Error creating wallet');
-      }
-      console.error(error);
-    }
   }, []);
 
   const handleConnectWallet = useCallback(async () => {
@@ -116,19 +100,17 @@ function App() {
     }
   }, [privateKey, loadWallet]);
 
-  const deleteDocument = useCallback(async (cid) => {
-    if (window.confirm('Are you sure you want to delete this document?')) {
-      try {
-        await axios.post(`http://localhost:3000/wallet/${loggedInUser}/delete`, { cid });
-        setMessage('Document deleted successfully');
-        loadWallet(publicAddress);
-        setSelectedDocument(null);
-      } catch (error) {
-        setMessage('Error deleting document');
-        console.error(error);
-      }
+  const hideDocument = useCallback(async (cid) => {
+    try {
+      await axios.post(`http://localhost:3000/wallet/${loggedInUser}/hide`, { privateKey, cid });
+      setMessage('Document hidden successfully');
+      loadWallet(publicAddress);
+      setSelectedDocument(null);
+    } catch (error) {
+      setMessage('Error hiding document');
+      console.error(error);
     }
-  }, [loggedInUser, publicAddress, loadWallet]);
+  }, [loggedInUser, publicAddress, loadWallet, privateKey]);
 
   const disconnectWallet = useCallback(() => {
     setLoggedInUser('');
@@ -154,11 +136,8 @@ function App() {
         email
       });
 
-      // Close any open document or popup views
       setSelectedDocument(null);
       setShowSendPopup(false);
-
-      // Set send success message
       setSendMessage(`Document sent successfully to ${email}`);
     } catch (error) {
       setMessage('Error sending document');
@@ -169,16 +148,15 @@ function App() {
   const handleDownloadFile = useCallback(async (cid) => {
     try {
       const response = await axios.get(`http://localhost:3000/download-file?cid=${cid}`, {
-        responseType: 'blob', // Important for file download
+        responseType: 'blob',
       });
 
       const contentDisposition = response.headers['content-disposition'];
-      console.log('Content-Disposition:', contentDisposition); // Debugging line
+      console.log('Content-Disposition:', contentDisposition);
 
       let fileName = 'downloaded_file';
 
       if (contentDisposition) {
-        // Try to match both standard and RFC 6266 formats
         const fileNameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?['"]?([^;'"]+)['"]?/i);
         if (fileNameMatch && fileNameMatch[1]) {
           fileName = decodeURIComponent(fileNameMatch[1].replace(/['"]/g, ''));
@@ -200,24 +178,27 @@ function App() {
     }
   }, []);
 
-  const showUserDetails = useCallback(() => {
-    setShowUserDetailsPopup(true);
+  const verifySignature = useCallback(async (documentHash, signature, publicAddress) => {
+    setLoading(true);
+    setShowVerificationPopup(true);
+    try {
+      const response = await axios.post('http://localhost:3000/verify-signature', {
+        documentHash,
+        signature,
+        publicAddress
+      });
+      setVerificationMessage(response.data.message);
+      setVerifiedData(response.data);
+      setLoading(false);
+    } catch (error) {
+      setVerificationMessage('Error verifying signature');
+      setLoading(false);
+      console.error(error);
+    }
   }, []);
 
-  const verifyDocumentIntegrity = useCallback(async (documentHash) => {
-    try {
-      const response = await axios.post('http://localhost:3000/verify-document', {
-        documentHash
-      });
-      if (response.data.isValid) {
-        alert('Document integrity verified.');
-      } else {
-        alert('Document integrity verification failed.');
-      }
-    } catch (error) {
-      console.error('Error verifying document integrity:', error);
-      alert('Error verifying document integrity.');
-    }
+  const showUserDetails = useCallback(() => {
+    setShowUserDetailsPopup(true);
   }, []);
 
   return (
@@ -234,7 +215,6 @@ function App() {
             </div>
             <button className="btn" onClick={() => setShowDocumentsPopup(true)}>Show Wallet</button>
             <p>{message}</p>
-            {cid &&  <p>CID: {cid}</p>}
           </>
         )}
       </header>
@@ -246,31 +226,22 @@ function App() {
             <button className="wallet-btn" onClick={connectAnotherWallet}>Connect Another Wallet</button>
           </>
         ) : (
-          <>
-            <button className="wallet-btn" onClick={() => openWalletPopup('create')}>Create Wallet</button>
-            <button className="wallet-btn" onClick={() => openWalletPopup('connect')}>Connect Wallet</button>
-          </>
+          <button className="wallet-btn" onClick={openWalletPopup}>Connect Wallet</button>
         )}
       </div>
 
       {showWalletPopup && (
         <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="wallet-popup-content">
-            <h2>{walletAction === 'create' ? 'Create Wallet' : 'Connect Existing Wallet'}</h2>
-            {walletAction === 'create' ? (
-              <button className="btn" onClick={handleCreateWallet}>Create Wallet</button>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  placeholder="Enter Private Key"
-                  value={privateKey}
-                  onChange={(e) => setPrivateKey(e.target.value)}
-                  className="input"
-                />
-                <button className="btn" onClick={handleConnectWallet}>Connect Wallet</button>
-              </>
-            )}
+            <h2>Connect Existing Wallet</h2>
+            <input
+              type="text"
+              placeholder="Enter Private Key"
+              value={privateKey}
+              onChange={(e) => setPrivateKey(e.target.value)}
+              className="input"
+            />
+            <button className="btn" onClick={handleConnectWallet}>Connect Wallet</button>
             <button className="btn" onClick={() => setShowWalletPopup(false)}>Close</button>
             <p>{message}</p>
           </div>
@@ -283,17 +254,18 @@ function App() {
             {selectedDocument ? (
               <div className="wallet-document-details">
                 <h2>{selectedDocument.fileName}</h2>
-                <p>CID: {selectedDocument.cid}</p>
-                <p>Timestamp: {new Date(selectedDocument.timestamp).toLocaleString()}</p>
+                <p>Hash: {selectedDocument.hash}</p>
+                <p>Timestamp: {new Date(selectedDocument.timestamp * 1000).toLocaleString()}</p> {/* Convert seconds to milliseconds */}
                 <p>Owner ID: {loggedInUser}</p>
                 <div className="btn-group">
-                  <button className="btn btn-delete" onClick={() => deleteDocument(selectedDocument.cid)}>Delete</button>
+                  <button className="btn btn-hide" onClick={() => hideDocument(selectedDocument.cid)}>Hide</button>
                   <button className="btn" onClick={() => setShowSendPopup(true)}>Send</button>
                   <button className="btn" onClick={() => handleDownloadFile(selectedDocument.cid)}>Download</button>
                   <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
-                  <button className="btn" onClick={() => verifyDocumentIntegrity(selectedDocument.hash)}>Verify Integrity</button>
+                  <button className="btn" onClick={() => verifySignature(selectedDocument.hash, selectedDocument.signature, publicAddress)}>Verify Signature</button>
                 </div>
                 {sendMessage && <p>{sendMessage}</p>}
+                {verificationMessage && <p>{verificationMessage}</p>}
               </div>
             ) : (
               <>
@@ -306,7 +278,7 @@ function App() {
                       <li key={index} onClick={() => setSelectedDocument(doc)} className={darkMode ? 'dark-mode' : ''}>
                         <p>{doc.fileName}</p>
                         <p>Owner ID: {loggedInUser}</p>
-                        <p>Timestamp: {new Date(doc.timestamp).toLocaleString()}</p>
+                        <p>Timestamp: {new Date(doc.timestamp * 1000).toLocaleString()}</p> {/* Convert seconds to milliseconds */}
                       </li>
                     ))}
                   </ul>
@@ -344,6 +316,29 @@ function App() {
             <p>Public Address: {publicAddress}</p>
             <p>Balance: {balance} ETH</p>
             <button className="btn" onClick={() => setShowUserDetailsPopup(false)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {showVerificationPopup && (
+        <div className={`wallet-popup verification-popup ${darkMode ? 'dark-mode' : ''}`}>
+          <div className="verification-popup-content">
+            {loading ? (
+              <LoadingSpinner /> // Display loading spinner while loading
+            ) : (
+              <>
+                <h2>Verification Details</h2>
+                {verifiedData && (
+                  <div className="verification-details">
+                    <p><span className="verified">✔</span> Document Hash: {verifiedData.documentHash}</p>
+                    <p><span className="verified">✔</span> Signature: {verifiedData.signature}</p>
+                    <p><span className="verified">✔</span> Public Address: {verifiedData.publicAddress}</p>
+                  </div>
+                )}
+                <button className="btn" onClick={() => setShowVerificationPopup(false)}>Close</button>
+              </>
+            )}
+            <p>{verificationMessage}</p>
           </div>
         </div>
       )}
