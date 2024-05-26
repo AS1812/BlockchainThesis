@@ -8,18 +8,15 @@ function App() {
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState('');
   const [cid, setCid] = useState('');
-  const [userId, setUserId] = useState('');
-  const [password, setPassword] = useState('');
+  const [publicAddress, setPublicAddress] = useState('');
+  const [privateKey, setPrivateKey] = useState('');
+  const [balance, setBalance] = useState('');
   const [documents, setDocuments] = useState([]);
   const [showWalletPopup, setShowWalletPopup] = useState(false);
   const [walletAction, setWalletAction] = useState('');
   const [showDocumentsPopup, setShowDocumentsPopup] = useState(false);
   const [loggedInUser, setLoggedInUser] = useState('');
-  const [publicAddress, setPublicAddress] = useState('');
   const [selectedDocument, setSelectedDocument] = useState(null);
-  const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [showSendPopup, setShowSendPopup] = useState(false);
   const [email, setEmail] = useState('');
   const [darkMode, setDarkMode] = useState(false);
@@ -34,9 +31,9 @@ function App() {
     setFile(e.target.files[0]);
   }, []);
 
-  const loadWallet = useCallback(async (userId, password) => {
+  const loadWallet = useCallback(async (publicAddress) => {
     try {
-      const response = await axios.get(`http://localhost:3000/wallet/${userId}/documents?password=${password}`);
+      const response = await axios.get(`http://localhost:3000/wallet/${publicAddress}/documents`);
       setDocuments(response.data);
     } catch (error) {
       setMessage('Error loading wallet');
@@ -44,20 +41,12 @@ function App() {
     }
   }, []);
 
-  useEffect(() => {
-    if (loggedInUser && password) {
-      const interval = setInterval(() => {
-        loadWallet(loggedInUser, password);
-      }, 5000); // Refresh every 5 seconds
-      return () => clearInterval(interval);
-    }
-  }, [loggedInUser, password, loadWallet]);
   const handleUpload = useCallback(async () => {
     if (!loggedInUser) {
       setMessage('Please log in to a wallet first');
       return;
     }
-  
+
     if (file) {
       const reader = new FileReader();
       reader.onload = async (e) => {
@@ -66,15 +55,14 @@ function App() {
         const fileType = file.type;
         try {
           const response = await axios.post('http://localhost:3000/upload', {
-            userId: loggedInUser,
-            password,
+            privateKey,
             fileContent: content,
             fileName,
             fileType
           });
           setMessage(response.data.message);
           setCid(response.data.cid);
-          loadWallet(loggedInUser, password);
+          loadWallet(publicAddress);
         } catch (error) {
           setMessage('Error uploading file');
           console.error(error);
@@ -84,23 +72,20 @@ function App() {
     } else {
       setMessage('Please select a file first');
     }
-  }, [file, loggedInUser, password, loadWallet]);
-  
+  }, [file, loggedInUser, privateKey, publicAddress, loadWallet]);
 
   const openWalletPopup = useCallback((action) => {
     setMessage('');
-    setUserId('');
-    setPassword('');
-    setWalletAction(action);
     setShowWalletPopup(true);
   }, []);
 
   const handleCreateWallet = useCallback(async () => {
     try {
-      const response = await axios.post('http://localhost:3000/create-wallet', { userId, password });
+      const response = await axios.post('http://localhost:3000/create-wallet');
       setMessage(response.data.message);
-      setLoggedInUser(userId);
+      setLoggedInUser(response.data.publicAddress);
       setPublicAddress(response.data.publicAddress);
+      setPrivateKey(response.data.privateKey);
       setShowWalletPopup(false);
     } catch (error) {
       if (error.response && error.response.data.message) {
@@ -110,15 +95,16 @@ function App() {
       }
       console.error(error);
     }
-  }, [userId, password]);
+  }, []);
 
   const handleConnectWallet = useCallback(async () => {
     try {
-      const response = await axios.post('http://localhost:3000/connect-wallet', { userId, password });
+      const response = await axios.post('http://localhost:3000/connect-wallet', { privateKey });
       setMessage(response.data.message);
-      setLoggedInUser(userId);
+      setLoggedInUser(response.data.publicAddress);
       setPublicAddress(response.data.publicAddress);
-      loadWallet(userId, password);
+      setBalance(response.data.balance);
+      loadWallet(response.data.publicAddress);
       setShowWalletPopup(false);
     } catch (error) {
       if (error.response && error.response.data.message) {
@@ -128,21 +114,21 @@ function App() {
       }
       console.error(error);
     }
-  }, [userId, password, loadWallet]);
+  }, [privateKey, loadWallet]);
 
   const deleteDocument = useCallback(async (cid) => {
     if (window.confirm('Are you sure you want to delete this document?')) {
       try {
-        await axios.post(`http://localhost:3000/wallet/${loggedInUser}/delete`, { password, cid });
+        await axios.post(`http://localhost:3000/wallet/${loggedInUser}/delete`, { cid });
         setMessage('Document deleted successfully');
-        loadWallet(loggedInUser, password);
+        loadWallet(publicAddress);
         setSelectedDocument(null);
       } catch (error) {
         setMessage('Error deleting document');
         console.error(error);
       }
     }
-  }, [loggedInUser, password, loadWallet]);
+  }, [loggedInUser, publicAddress, loadWallet]);
 
   const disconnectWallet = useCallback(() => {
     setLoggedInUser('');
@@ -155,25 +141,6 @@ function App() {
     setShowWalletPopup(true);
   }, [disconnectWallet]);
 
-  const handleChangePassword = useCallback(async () => {
-    try {
-      const response = await axios.post('http://localhost:3000/change-password', {
-        userId: loggedInUser,
-        oldPassword,
-        newPassword
-      });
-      setMessage(response.data.message);
-      setShowChangePasswordPopup(false);
-    } catch (error) {
-      if (error.response && error.response.data.message) {
-        setMessage(error.response.data.message);
-      } else {
-        setMessage('Error changing password');
-      }
-      console.error(error);
-    }
-  }, [loggedInUser, oldPassword, newPassword]);
-
   const handleSend = useCallback(async () => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setMessage('Invalid email address');
@@ -183,7 +150,6 @@ function App() {
     try {
       const response = await axios.post('http://localhost:3000/send-document', {
         senderId: loggedInUser,
-        senderPassword: password,
         documentCid: selectedDocument.cid,
         email
       });
@@ -198,19 +164,19 @@ function App() {
       setMessage('Error sending document');
       console.error(error);
     }
-  }, [loggedInUser, password, selectedDocument, email]);
+  }, [loggedInUser, selectedDocument, email]);
 
   const handleDownloadFile = useCallback(async (cid) => {
     try {
       const response = await axios.get(`http://localhost:3000/download-file?cid=${cid}`, {
         responseType: 'blob', // Important for file download
       });
-  
+
       const contentDisposition = response.headers['content-disposition'];
       console.log('Content-Disposition:', contentDisposition); // Debugging line
-  
+
       let fileName = 'downloaded_file';
-  
+
       if (contentDisposition) {
         // Try to match both standard and RFC 6266 formats
         const fileNameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?['"]?([^;'"]+)['"]?/i);
@@ -218,7 +184,7 @@ function App() {
           fileName = decodeURIComponent(fileNameMatch[1].replace(/['"]/g, ''));
         }
       }
-  
+
       const blob = new Blob([response.data], { type: response.headers['content-type'] });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -226,16 +192,14 @@ function App() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-  
+
       setMessage('File downloaded successfully');
     } catch (error) {
       setMessage('Error downloading file');
       console.error(error);
     }
   }, []);
-  
-  
-  
+
   const showUserDetails = useCallback(() => {
     setShowUserDetailsPopup(true);
   }, []);
@@ -280,7 +244,6 @@ function App() {
           <>
             <button className="wallet-btn" onClick={disconnectWallet}>Disconnect Wallet</button>
             <button className="wallet-btn" onClick={connectAnotherWallet}>Connect Another Wallet</button>
-            <button className="wallet-btn" onClick={() => setShowChangePasswordPopup(true)}>Change Password</button>
           </>
         ) : (
           <>
@@ -294,51 +257,21 @@ function App() {
         <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="wallet-popup-content">
             <h2>{walletAction === 'create' ? 'Create Wallet' : 'Connect Existing Wallet'}</h2>
-            <input
-              type="text"
-              placeholder="Enter User ID"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              className="input"
-            />
-            <input
-              type="password"
-              placeholder="Enter Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="input"
-            />
             {walletAction === 'create' ? (
               <button className="btn" onClick={handleCreateWallet}>Create Wallet</button>
             ) : (
-              <button className="btn" onClick={handleConnectWallet}>Connect Wallet</button>
+              <>
+                <input
+                  type="text"
+                  placeholder="Enter Private Key"
+                  value={privateKey}
+                  onChange={(e) => setPrivateKey(e.target.value)}
+                  className="input"
+                />
+                <button className="btn" onClick={handleConnectWallet}>Connect Wallet</button>
+              </>
             )}
             <button className="btn" onClick={() => setShowWalletPopup(false)}>Close</button>
-            <p>{message}</p>
-          </div>
-        </div>
-      )}
-
-      {showChangePasswordPopup && (
-        <div className={`wallet-popup ${darkMode ? 'dark-mode' : ''}`}>
-          <div className="wallet-popup-content">
-            <h2>Change Password</h2>
-            <input
-              type="password"
-              placeholder="Enter Old Password"
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-              className="input"
-            />
-            <input
-              type="password"
-              placeholder="Enter New Password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="input"
-            />
-            <button className="btn" onClick={handleChangePassword}>Change Password</button>
-            <button className="btn" onClick={() => setShowChangePasswordPopup(false)}>Close</button>
             <p>{message}</p>
           </div>
         </div>
@@ -409,6 +342,7 @@ function App() {
             <h2>Wallet Details</h2>
             <p>Owner ID: {loggedInUser}</p>
             <p>Public Address: {publicAddress}</p>
+            <p>Balance: {balance} ETH</p>
             <button className="btn" onClick={() => setShowUserDetailsPopup(false)}>Close</button>
           </div>
         </div>

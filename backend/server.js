@@ -15,79 +15,43 @@ const mg = mailgun({ apiKey: '6b39e24da26dd0b49807501a479f44c9-a2dd40a3-42e3fa78
 
 const app = express();
 const blockchain = new Blockchain();
-
 app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
-mongoose.connect('mongodb://localhost:27017/blockchain', { useNewUrlParser: true, useUnifiedTopology: true });
 
-// Create a new wallet
 app.post('/create-wallet', async (req, res) => {
-  const { userId, password } = req.body;
   try {
-    const existingWallet = await blockchain.getWallet(userId);
-    if (existingWallet) {
-      res.status(400).send({ message: 'This user ID already has a wallet' });
-    } else {
-      const wallet = await blockchain.addWallet(userId, password);
-      res.send({ message: 'Wallet created successfully', userId, publicAddress: wallet.publicAddress });
-    }
+    const account = await blockchain.createAccount();
+    res.send({ message: 'Wallet created successfully', publicAddress: account.address, privateKey: account.privateKey });
   } catch (error) {
     console.error('Error creating wallet:', error);
     res.status(500).send({ message: 'Error creating wallet' });
   }
 });
 
-// Connect to the wallet
 app.post('/connect-wallet', async (req, res) => {
-  const { userId, password } = req.body;
+  const { privateKey } = req.body;
   try {
-    const validPassword = await blockchain.validatePassword(userId, password);
-    if (validPassword) {
-      const wallet = await blockchain.getWallet(userId);
-      res.send({ message: 'Wallet connected', userId, publicAddress: wallet.publicAddress });
-    } else {
-      res.status(404).send({ message: 'Invalid user ID or password' });
+    const verification = await blockchain.verifyAccount(privateKey);
+    if (!verification.valid) {
+      return res.status(400).send({ message: 'Invalid private key or insufficient balance', error: verification.error });
     }
+
+    res.send({ message: 'Wallet connected successfully', publicAddress: verification.address, balance: verification.balance });
   } catch (error) {
     console.error('Error connecting to wallet:', error);
     res.status(500).send({ message: 'Error connecting to wallet' });
   }
 });
 
-// Change password
-app.post('/change-password', async (req, res) => {
-  const { userId, oldPassword, newPassword } = req.body;
-  try {
-    const validPassword = await blockchain.validatePassword(userId, oldPassword);
-    if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or password' });
-    }
-
-    const hashedNewPassword = crypto.createHash('sha256').update(newPassword).digest('hex');
-    await WalletModel.updateOne({ userId }, { password: hashedNewPassword });
-    res.send({ message: 'Password changed successfully' });
-  } catch (error) {
-    console.error('Error changing password:', error);
-    res.status(500).send({ message: 'Error changing password' });
-  }
-});
-
-// Upload document to Pinata with blockchain signing
 app.post('/upload', async (req, res) => {
-  const { userId, password, fileContent, fileName, fileType } = req.body;
+  const { privateKey, fileContent, fileName, fileType } = req.body;
   try {
-    const validPassword = await blockchain.validatePassword(userId, password);
-    if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or password' });
-    }
-
     const buffer = Buffer.from(fileContent, 'base64');
     const documentHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // Sign the document hash with the user's wallet
-    const signature = await blockchain.signDocument(userId, documentHash);
+    const signature = await blockchain.signDocument(privateKey, documentHash);
 
     const formData = new FormData();
     formData.append('file', buffer, { filename: fileName });
@@ -95,7 +59,6 @@ app.post('/upload', async (req, res) => {
     const pinataMetadata = JSON.stringify({
       name: fileName,
       keyvalues: {
-        userId: userId,
         fileType: fileType,
         signature: signature,
         timestamp: Date.now().toString()
@@ -117,6 +80,10 @@ app.post('/upload', async (req, res) => {
     });
     const cid = response.data.IpfsHash;
 
+    console.log('Uploading file to blockchain with CID:', cid);
+
+    await blockchain.uploadFile(privateKey, cid, fileName, fileType, signature);
+
     res.send({ message: 'File uploaded and signed', hash: documentHash, signature, cid });
   } catch (error) {
     console.error('Error uploading file:', error);
@@ -124,72 +91,17 @@ app.post('/upload', async (req, res) => {
   }
 });
 
-// Retrieve wallet documents
-app.get('/wallet/:userId/documents', async (req, res) => {
-  const { userId } = req.params;
-  const { password } = req.query;
+app.get('/wallet/:publicAddress/documents', async (req, res) => {
+  const { publicAddress } = req.params;
   try {
-    const validPassword = await blockchain.validatePassword(userId, password);
-    if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or password' });
-    }
-
-    const response = await axios.get("https://api.pinata.cloud/data/pinList", {
-      headers: {
-        'Authorization': `Bearer ${pinataJWT}`
-      },
-      params: {
-        status: 'pinned',
-        'metadata[keyvalues][userId][value]': userId,
-        'metadata[keyvalues][userId][op]': 'eq'
-      }
-    });
-
-    res.json(response.data.rows.map(doc => ({
-      cid: doc.ipfs_pin_hash,
-      fileName: doc.metadata.name,
-      fileType: doc.metadata.keyvalues.fileType,
-      signature: doc.metadata.keyvalues.signature,
-      timestamp: parseInt(doc.metadata.keyvalues.timestamp, 10),
-    })));
+    const files = await blockchain.getFiles(publicAddress);
+    res.json(files); // Use res.json to handle JSON serialization
   } catch (error) {
-    console.error('Error retrieving documents:', error);
-    res.status(500).send({ message: 'Error retrieving documents' });
+    console.error('Error loading wallet:', error);
+    res.status(500).send({ message: 'Error loading wallet' });
   }
 });
 
-// Delete a document from Pinata
-app.post('/wallet/:userId/delete', async (req, res) => {
-  const { userId } = req.params;
-  const { password, cid } = req.body;
-
-  try {
-    const validPassword = await blockchain.validatePassword(userId, password);
-    if (!validPassword) {
-      return res.status(404).send({ message: 'Invalid user ID or password' });
-    }
-
-    if (!cid) {
-      return res.status(400).send({ message: 'CID is required' });
-    }
-
-    const response = await axios.delete(`https://api.pinata.cloud/pinning/unpin/${cid}`, {
-      headers: {
-        'Authorization': `Bearer ${pinataJWT}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (response.status === 200) {
-      res.send({ message: 'Document deleted successfully' });
-    } else {
-      res.status(response.status).send({ message: 'Error deleting document from Pinata', error: response.data });
-    }
-  } catch (error) {
-    console.error('Error deleting document:', error);
-    res.status(500).send({ message: 'Error deleting document' });
-  }
-});
 
 // Download file from IPFS
 app.get('/download-file', async (req, res) => {
@@ -237,11 +149,6 @@ app.post('/send-document', async (req, res) => {
   }
 
   try {
-    const validPassword = await blockchain.validatePassword(senderId, senderPassword);
-    if (!validPassword) {
-      return res.status(401).send({ message: 'Invalid password' });
-    }
-
     const response = await axios.get(`https://gateway.pinata.cloud/ipfs/${documentCid}`, {
       responseType: 'arraybuffer',
       headers: {

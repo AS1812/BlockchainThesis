@@ -1,56 +1,81 @@
-const { Web3 } = require('web3');
-const crypto = require('crypto');
-const mongoose = require('mongoose');
+const { Web3 = require('web3');
+const { abi } = require('./artifacts/contracts/FileStorage.sol/FileStorage.json');
 
-// Connect to MongoDB
-mongoose.connect('mongodb://localhost:27017/blockchain', { useNewUrlParser: true, useUnifiedTopology: true });
+const ganacheURL = 'http://127.0.0.1:8545';
+const web3 = new Web3(new Web3.providers.HttpProvider(ganacheURL));
 
-// Define Wallet schema and model
-const walletSchema = new mongoose.Schema({
-  userId: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  publicAddress: { type: String, required: true, unique: true },
-  privateKey: { type: String, required: true }
-});
-
-const WalletModel = mongoose.model('Wallet', walletSchema);
+// Replace with your deployed contract address
+const contractAddress = '0x95d3f5411e42C2216Bd3fa77991A2c349Cbe2085';
+const fileStorageContract = new web3.eth.Contract(abi, contractAddress);
 
 class Blockchain {
-  constructor() {
-    // Replace the Infura URL with your Alchemy URL
-    this.web3 = new Web3('https://eth-mainnet.g.alchemy.com/v2/UmfP_4PlAUB7ljPjEmeVRfB2qrFMPosg');
+  constructor() {}
+
+  async createAccount() {
+    const account = web3.eth.accounts.create();
+    return account;
   }
 
-  async addWallet(userId, password) {
-    const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
-    const account = this.web3.eth.accounts.create();
-    const wallet = new WalletModel({ 
-      userId, 
-      password: hashedPassword, 
-      publicAddress: account.address,
-      privateKey: account.privateKey 
-    });
-    await wallet.save();
-    return wallet;
+  validatePrivateKey(privateKey) {
+    if (privateKey.startsWith('0x')) {
+      privateKey = privateKey.slice(2);
+    }
+    if (privateKey.length !== 64) {
+      throw new Error('Invalid private key length. Expected 64 characters.');
+    }
+    return '0x' + privateKey;
   }
 
-  async getWallet(userId) {
-    return await WalletModel.findOne({ userId });
+  async verifyAccount(privateKey) {
+    try {
+      const validPrivateKey = this.validatePrivateKey(privateKey);
+      const account = web3.eth.accounts.privateKeyToAccount(validPrivateKey);
+      const balance = await web3.eth.getBalance(account.address);
+
+      return {
+        address: account.address,
+        balance: web3.utils.fromWei(balance, 'ether'),
+        valid: true
+      };
+    } catch (error) {
+      return { valid: false, error: error.message };
+    }
   }
 
-  async validatePassword(userId, password) {
-    const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
-    const wallet = await WalletModel.findOne({ userId, password: hashedPassword });
-    return wallet !== null;
-  }
-
-  async signDocument(userId, documentHash) {
-    const wallet = await this.getWallet(userId);
-    if (!wallet) throw new Error('Wallet not found');
-
-    const signedMessage = this.web3.eth.accounts.sign(documentHash, wallet.privateKey);
+  async signDocument(privateKey, documentHash) {
+    const validPrivateKey = this.validatePrivateKey(privateKey);
+    const signedMessage = web3.eth.accounts.sign(documentHash, validPrivateKey);
     return signedMessage.signature;
+  }
+
+  async uploadFile(privateKey, cid, fileName, fileType, signature) {
+    const account = web3.eth.accounts.privateKeyToAccount(privateKey);
+    web3.eth.accounts.wallet.add(account);
+
+    console.log(`Uploading file to blockchain from account: ${account.address}`);
+
+    const gasEstimate = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature).estimateGas({ from: account.address });
+    console.log(`Estimated gas: ${gasEstimate}`);
+
+    const result = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature).send({
+      from: account.address,
+      gas: gasEstimate
+    });
+
+    console.log('Transaction result:', result);
+    return result;
+  }
+
+  async getFiles(userAddress) {
+    const files = await fileStorageContract.methods.getFiles(userAddress).call();
+    return files.map(file => ({
+      cid: file.cid,
+      fileName: file.fileName,
+      fileType: file.fileType,
+      signature: file.signature,
+      timestamp: file.timestamp.toString() // Convert BigInt to string
+    }));
   }
 }
 
-module.exports = { Blockchain, WalletModel };
+module.exports = { Blockchain };
