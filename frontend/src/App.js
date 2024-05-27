@@ -320,6 +320,7 @@ function App() {
         </div>
       )}
 
+
       {showVerificationPopup && (
         <div className={`wallet-popup verification-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="verification-popup-content">
@@ -333,6 +334,7 @@ function App() {
                     <p><span className="verified">✔</span> Document Hash: {verifiedData.documentHash}</p>
                     <p><span className="verified">✔</span> Signature: {verifiedData.signature}</p>
                     <p><span className="verified">✔</span> Public Address: {verifiedData.publicAddress}</p>
+                    <p><span className="verified">✔</span> Message: {verifiedData.prefixedMessage}</p>
                   </div>
                 )}
                 <button className="btn" onClick={() => setShowVerificationPopup(false)}>Close</button>

@@ -45,8 +45,10 @@ class Blockchain {
   async signDocument(privateKey, documentHash) {
     const validPrivateKey = this.validatePrivateKey(privateKey);
     const account = web3.eth.accounts.privateKeyToAccount(validPrivateKey);
-    const message = web3.utils.soliditySha3(documentHash); // Ensure this matches the expected message hash format
-    const signedMessage = await account.sign(message);
+  
+    // Ethereum prefix
+    const prefixedMessage = web3.eth.accounts.hashMessage(documentHash);
+    const signedMessage = await account.sign(prefixedMessage);
     const timestamp = Math.floor(Date.now() / 1000); // Timestamp in seconds
   
     return { signature: signedMessage.signature, timestamp };
@@ -83,7 +85,7 @@ class Blockchain {
       hidden: file.hidden
     }));
   }
-
+  
   async hideFile(privateKey, cid) {
     const validPrivateKey = this.validatePrivateKey(privateKey);
     const account = web3.eth.accounts.privateKeyToAccount(validPrivateKey);

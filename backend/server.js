@@ -2,8 +2,6 @@ const { Web3 } = require('web3');
 const ganacheURL = 'http://127.0.0.1:8545';
 const web3 = new Web3(new Web3.providers.HttpProvider(ganacheURL));
 
-
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
@@ -85,7 +83,6 @@ app.post('/upload', async (req, res) => {
   }
 });
 
-
 app.get('/wallet/:publicAddress/documents', async (req, res) => {
   const { publicAddress } = req.params;
   try {
@@ -163,31 +160,58 @@ app.post('/send-document', async (req, res) => {
     });
 
     if (response.status === 200) {
-      const fileName = `${documentCid}.pdf`;
+      // Retrieve the document metadata from the blockchain
+      const documentMetadata = await blockchain.getFiles(senderId);
+      const document = documentMetadata.find(doc => doc.cid === documentCid);
+      if (!document) {
+        return res.status(404).send({ message: 'Document not found in blockchain metadata' });
+      }
 
-      const emailData = {
-        from: `no-reply@${DOMAIN}`,
-        to: email,
-        subject: 'Document Details',
-        html: `<h1>Document Details</h1>
-          <p><strong>Owner ID:</strong> ${senderId}</p>
-          <p><strong>Document CID:</strong> ${documentCid}</p>
-          <p><strong>File Name:</strong> ${fileName}</p>`,
-        attachment: {
-          data: response.data,
-          filename: fileName,
-        }
+      const { fileName, hash, signature, timestamp } = document;
+      const attachmentBuffer = Buffer.from(response.data, 'binary');
+
+      // Create form data for the email
+      const emailContent = new FormData();
+      emailContent.append('from', 'no-reply@' + DOMAIN);
+      emailContent.append('to', email);
+      emailContent.append('subject', 'Document Details');
+      emailContent.append('html', `<h1>Hello!</h1>
+        <p>You have received a signed document!</p>
+        <p><strong>Document hash:</strong> ${hash}</p>
+        <p><strong>Public message used for verification:</strong> ${web3.eth.accounts.hashMessage(hash)}</p>
+        <p>The document is digitally signed, having the following attributes:</p>
+        <ul>
+          <li><strong>Public Address:</strong> ${senderId}</li>
+          <li><strong>Signature:</strong> ${signature}</li>
+          <li><strong>Timestamp:</strong> ${new Date(timestamp * 1000).toUTCString()}</li>
+        </ul>
+        <p>You can verify the integrity of the file anytime by accessing the following verification link:</p>
+        <p><a href="https://etherscan.io/verifiedSignatures#">https://etherscan.io/verifiedSignatures#</a></p>
+        <p>Or by regenerating the document HASH, which can be done at the following link:</p>
+        <p><a href="https://md5file.com/calculator">https://md5file.com/calculator</a></p>
+        <p>Have a nice day!</p>`);
+      emailContent.append('attachment', attachmentBuffer, { filename: fileName, contentType: 'application/pdf' });
+
+      // Convert form data to headers and body for request
+      const emailOptions = {
+        method: 'POST',
+        url: `https://api.mailgun.net/v3/${DOMAIN}/messages`,
+        headers: {
+          ...emailContent.getHeaders(),
+          'Authorization': 'Basic ' + Buffer.from('api:' + mg.apiKey).toString('base64')
+        },
+        data: emailContent
       };
 
-      mg.messages().send(emailData, (error, body) => {
-        if (error) {
-          console.error('Error sending email:', error);
-          res.status(500).send({ message: 'Error sending email' });
-        } else {
-          console.log('Email sent:', body);
-          res.send({ message: 'Email sent successfully' });
-        }
-      });
+      const emailResponse = await axios(emailOptions);
+
+      if (emailResponse.status === 200) {
+        console.log('Email sent:', emailResponse.data);
+        res.send({ message: 'Email sent successfully' });
+      } else {
+        console.error('Error sending email:', emailResponse.data);
+        res.status(500).send({ message: 'Error sending email' });
+      }
     } else {
       res.status(response.status).send({ message: 'Failed to retrieve document from IPFS.', error: response.data });
     }
@@ -197,14 +221,16 @@ app.post('/send-document', async (req, res) => {
   }
 });
 
+
 app.post('/verify-signature', (req, res) => {
   const { documentHash, signature, publicAddress } = req.body;
 
-  const message = web3.utils.sha3(`\x19Ethereum Signed Message:\n${documentHash.length}${documentHash}`);
-  const signer = web3.eth.accounts.recover(message, signature);
+  // Ethereum prefix
+  const prefixedMessage = web3.eth.accounts.hashMessage(documentHash);
+  const signer = web3.eth.accounts.recover(prefixedMessage, signature);
 
   if (signer.toLowerCase() === publicAddress.toLowerCase()) {
-    res.send({ message: 'Signature is valid', valid: true, documentHash, signature, publicAddress });
+    res.send({ message: 'Signature is valid', valid: true, documentHash, signature, publicAddress, prefixedMessage });
   } else {
     res.send({ message: 'Signature is invalid', valid: false });
   }
