@@ -1,9 +1,8 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
 import ParticlesComponent from './components/ParticlesBackground';
-import Modal from './components/Modal';
-import LoadingSpinner from './components/LoadingSpinner'; // Create this component to show a loading spinner
+import LoadingSpinner from './components/LoadingSpinner';
 
 function App() {
   const [file, setFile] = useState(null);
@@ -57,13 +56,13 @@ function App() {
         const fileName = file.name;
         const fileType = file.type;
         try {
-          const response = await axios.post('http://localhost:3000/upload', {
+          await axios.post('http://localhost:3000/upload', {
             privateKey,
             fileContent: content,
             fileName,
             fileType
           });
-          setMessage(response.data.message);
+          setMessage('File uploaded successfully');
           loadWallet(publicAddress);
         } catch (error) {
           setMessage('Error uploading file');
@@ -105,7 +104,8 @@ function App() {
       await axios.post(`http://localhost:3000/wallet/${loggedInUser}/hide`, { privateKey, cid });
       setMessage('Document hidden successfully');
       loadWallet(publicAddress);
-      setSelectedDocument(null);
+      setSelectedDocument(null); // Close the document details popup
+      setShowDocumentsPopup(true); // Show the documents list popup
     } catch (error) {
       setMessage('Error hiding document');
       console.error(error);
@@ -130,7 +130,7 @@ function App() {
     }
 
     try {
-      const response = await axios.post('http://localhost:3000/send-document', {
+      await axios.post('http://localhost:3000/send-document', {
         senderId: loggedInUser,
         documentCid: selectedDocument.cid,
         email
@@ -145,33 +145,19 @@ function App() {
     }
   }, [loggedInUser, selectedDocument, email]);
 
-  const handleDownloadFile = useCallback(async (cid) => {
+  const handleDownloadFile = useCallback(async (cid, fileName) => {
     try {
-      const response = await axios.get(`http://localhost:3000/download-file?cid=${cid}`, {
+      const response = await axios.get(`http://localhost:3000/download/${cid}`, {
         responseType: 'blob',
       });
 
-      const contentDisposition = response.headers['content-disposition'];
-      console.log('Content-Disposition:', contentDisposition);
-
-      let fileName = 'downloaded_file';
-
-      if (contentDisposition) {
-        const fileNameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?['"]?([^;'"]+)['"]?/i);
-        if (fileNameMatch && fileNameMatch[1]) {
-          fileName = decodeURIComponent(fileNameMatch[1].replace(/['"]/g, ''));
-        }
-      }
-
-      const blob = new Blob([response.data], { type: response.headers['content-type'] });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = fileName;
+      link.href = url;
+      link.setAttribute('download', fileName);
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-
-      setMessage('File downloaded successfully');
+      link.parentNode.removeChild(link);
     } catch (error) {
       setMessage('Error downloading file');
       console.error(error);
@@ -255,12 +241,12 @@ function App() {
               <div className="wallet-document-details">
                 <h2>{selectedDocument.fileName}</h2>
                 <p>Hash: {selectedDocument.hash}</p>
-                <p>Timestamp: {new Date(selectedDocument.timestamp * 1000).toLocaleString()}</p> {/* Convert seconds to milliseconds */}
+                <p>Timestamp: {new Date(selectedDocument.timestamp * 1000).toLocaleString()}</p>
                 <p>Owner ID: {loggedInUser}</p>
                 <div className="btn-group">
                   <button className="btn btn-hide" onClick={() => hideDocument(selectedDocument.cid)}>Hide</button>
                   <button className="btn" onClick={() => setShowSendPopup(true)}>Send</button>
-                  <button className="btn" onClick={() => handleDownloadFile(selectedDocument.cid)}>Download</button>
+                  <button className="btn" onClick={() => handleDownloadFile(selectedDocument.cid, selectedDocument.fileName)}>Download</button>
                   <button className="btn" onClick={() => setSelectedDocument(null)}>Back to List</button>
                   <button className="btn" onClick={() => verifySignature(selectedDocument.hash, selectedDocument.signature, publicAddress)}>Verify Signature</button>
                 </div>
@@ -278,7 +264,7 @@ function App() {
                       <li key={index} onClick={() => setSelectedDocument(doc)} className={darkMode ? 'dark-mode' : ''}>
                         <p>{doc.fileName}</p>
                         <p>Owner ID: {loggedInUser}</p>
-                        <p>Timestamp: {new Date(doc.timestamp * 1000).toLocaleString()}</p> {/* Convert seconds to milliseconds */}
+                        <p>Timestamp: {new Date(doc.timestamp * 1000).toLocaleString()}</p>
                       </li>
                     ))}
                   </ul>
@@ -320,12 +306,11 @@ function App() {
         </div>
       )}
 
-
       {showVerificationPopup && (
         <div className={`wallet-popup verification-popup ${darkMode ? 'dark-mode' : ''}`}>
           <div className="verification-popup-content">
             {loading ? (
-              <LoadingSpinner /> // Display loading spinner while loading
+              <LoadingSpinner />
             ) : (
               <>
                 <h2>Verification Details</h2>

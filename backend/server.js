@@ -87,7 +87,24 @@ app.get('/wallet/:publicAddress/documents', async (req, res) => {
   const { publicAddress } = req.params;
   try {
     const files = await blockchain.getFiles(publicAddress);
-    const visibleFiles = files.filter(file => !file.hidden); // Filter out hidden files
+
+    // Filter out files that are no longer available on IPFS
+    const availableFiles = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const response = await axios.head(`https://gateway.pinata.cloud/ipfs/${file.cid}`, {
+            headers: {
+              'Authorization': `Bearer ${pinataJWT}`
+            }
+          });
+          return response.status === 200 ? file : null;
+        } catch (error) {
+          return null;
+        }
+      })
+    );
+
+    const visibleFiles = availableFiles.filter(file => file && !file.hidden); // Filter out hidden files and unavailable files
     res.json(visibleFiles);
   } catch (error) {
     console.error('Error loading wallet:', error);
@@ -95,48 +112,49 @@ app.get('/wallet/:publicAddress/documents', async (req, res) => {
   }
 });
 
+
+
 app.post('/wallet/:publicAddress/hide', async (req, res) => {
   const { privateKey, cid } = req.body;
   try {
+    // Remove the file from Pinata
+    await axios.delete(`https://api.pinata.cloud/pinning/unpin/${cid}`, {
+      headers: {
+        'Authorization': `Bearer ${pinataJWT}`
+      }
+    });
+
     await blockchain.hideFile(privateKey, cid);
-    res.send({ message: 'Document hidden successfully' });
+    res.send({ message: 'Document hidden and removed from IPFS successfully' });
   } catch (error) {
     console.error('Error hiding document:', error);
     res.status(500).send({ message: 'Error hiding document' });
   }
 });
-
 // Download file from IPFS
-app.get('/download-file', async (req, res) => {
-  const { cid } = req.query;
+app.get('/download/:cid', async (req, res) => {
+  const { cid } = req.params;
 
   try {
     const response = await axios.get(`https://gateway.pinata.cloud/ipfs/${cid}`, {
       responseType: 'arraybuffer',
       headers: {
-        'Accept': 'application/json, text/plain, */*',
         'Authorization': `Bearer ${pinataJWT}`
       }
     });
 
     if (response.status === 200) {
-      const fileType = response.headers['content-type'];
-      const fileName = `${cid}.${fileType.split('/')[1]}`;
-
-      res.set({
-        'Content-Type': fileType,
-        'Content-Disposition': `attachment; filename=${fileName}`
-      });
-
-      res.send(response.data);
+      res.setHeader('Content-Disposition', `attachment; filename=${cid}`);
+      res.send(Buffer.from(response.data, 'binary'));
     } else {
-      res.status(response.status).send({ message: 'Failed to retrieve file details for download.', error: response.data });
+      res.status(response.status).send({ message: 'Failed to retrieve document from IPFS.', error: response.data });
     }
   } catch (error) {
-    console.error('Error downloading file:', error);
-    res.status(500).send({ message: 'Error downloading file' });
+    console.error('Error downloading document:', error);
+    res.status(500).send({ message: 'Internal server error' });
   }
 });
+
 
 app.post('/send-document', async (req, res) => {
   const { senderId, documentCid, email } = req.body;
