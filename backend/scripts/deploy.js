@@ -16,3 +16,10 @@ async function main() {
       process.exit(1);
     });
   
+
+
+const FileStorage = await ethers.getContractFactory("FileStorage");
+const fileStorage = await FileStorage.attach("ADDRESS_OF_DEPLOYED_CONTRACT");
+
+const files = await fileStorage.getFiles("USER_ADDRESS");
+console.log(files);

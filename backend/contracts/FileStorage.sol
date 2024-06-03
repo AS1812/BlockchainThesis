@@ -14,10 +14,12 @@ contract FileStorage {
 
     mapping(address => File[]) private files;
 
-    event FileUploaded(address indexed user, string cid, string fileName, string fileType, string signature, uint256 timestamp, string hash);
+    event FileUploaded(address indexed user, string cid, string fileName, string 
+    fileType, string signature, uint256 timestamp, string hash);
     event FileHidden(address indexed user, string cid);
 
-    function uploadFile(string memory cid, string memory fileName, string memory fileType, string memory signature, string memory hash, uint256 timestamp) public {
+    function uploadFile(string memory cid, string memory fileName, string memory fileType, 
+    string memory signature, string memory hash, uint256 timestamp) public {
         files[msg.sender].push(File(cid, fileName, fileType, signature, timestamp, hash, false));
         emit FileUploaded(msg.sender, cid, fileName, fileType, signature, timestamp, hash);
     }

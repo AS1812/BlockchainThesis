@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
+import logo from './DocChainLogo.png';
 import ParticlesComponent from './components/ParticlesBackground';
 import LoadingSpinner from './components/LoadingSpinner';
 
@@ -191,8 +192,9 @@ function App() {
     <div className={`App ${darkMode ? 'dark-mode' : ''}`}>
       <ParticlesComponent id="particles" darkMode={darkMode} />
 
-      <header className="App-header">
-        <h1 className={darkMode ? 'dark-mode' : ''}>DocOps</h1>
+      <header className={`App-header ${darkMode ? 'dark-mode' : ''}`}>
+        <img src={logo} alt="DocChain Logo" style={{ width: '200px' }} />
+        <h1 className={darkMode ? 'dark-mode' : ''}>e-DocChain</h1>
         {loggedInUser && (
           <>
             <div className="upload-container">

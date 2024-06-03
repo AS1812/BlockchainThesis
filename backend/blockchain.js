@@ -4,7 +4,6 @@ const { abi } = require('./artifacts/contracts/FileStorage.sol/FileStorage.json'
 const ganacheURL = 'http://127.0.0.1:8545';
 const web3 = new Web3(new Web3.providers.HttpProvider(ganacheURL));
 
-// Replace with your deployed contract address
 const contractAddress = '0xB2078FdE2C5dFbAE98Ad1d3D9874f05536279EF2';
 const fileStorageContract = new web3.eth.Contract(abi, contractAddress);
 
@@ -61,7 +60,8 @@ class Blockchain {
 
     console.log(`Uploading file to blockchain from account: ${account.address}`);
 
-    const gasEstimate = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature, hash, timestamp).estimateGas({ from: account.address });
+    const gasEstimate = await fileStorageContract.methods.uploadFile(cid, fileName, fileType,
+     signature, hash, timestamp).estimateGas({ from: account.address });
     console.log(`Estimated gas: ${gasEstimate}`);
 
     const result = await fileStorageContract.methods.uploadFile(cid, fileName, fileType, signature, hash, timestamp).send({
